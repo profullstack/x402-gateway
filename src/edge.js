@@ -59,16 +59,25 @@ export function inCidrs(ip, compiled) {
 /**
  * The caller's address, as the edge reported it.
  *
- * `x-forwarded-for` is a list the client can seed; the LAST hop appended by
- * our own edge is trustworthy and the first is not, but every platform in
- * front of these sites (Railway, a bare droplet behind nginx) puts the real
- * client first and nothing else, so first is what is used. `x-real-ip` is the
- * nginx spelling of the same thing.
+ * `x-forwarded-for` is a list the client can seed, and a denylist read from
+ * its first entry is a denylist any client can step around by sending one.
+ * The entry our own edge appends is the LAST, on every platform in front of
+ * these sites (Railway's proxy, nginx with `$proxy_add_x_forwarded_for`), so
+ * last is what is used. `x-real-ip` is nginx's spelling of the same hop and
+ * is preferred when present, because nginx sets it from the socket and
+ * nothing a client sends survives into it.
+ *
+ * A CDN in front of the edge would make the last hop the CDN's; put its
+ * ranges nowhere near `denyCidrs` and this still fails safe: nothing is
+ * refused, nothing is charged, by this check.
  */
 export function clientIp(request) {
+  const real = request.headers.get('x-real-ip')?.trim();
+  if (real) return real;
   const xff = request.headers.get('x-forwarded-for');
-  if (xff) return xff.split(',')[0].trim();
-  return request.headers.get('x-real-ip')?.trim() ?? '';
+  if (!xff) return '';
+  const hops = xff.split(',').map((h) => h.trim()).filter(Boolean);
+  return hops[hops.length - 1] ?? '';
 }
 
 /* -------------------------------------------------------------- spoofing -- */
