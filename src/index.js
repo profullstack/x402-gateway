@@ -29,7 +29,9 @@ export { buildOffer, decodePayment, expectedFor, METHODS, verifyAndSettle } from
  * or as an HTML sales page if it asked for HTML -- on every path but the few it
  * needs to read to comply. Paying the offer, at the sales page or on any 402'd
  * URL, returns a signed pass good for `passMinutes`, presented in `header` on
- * every request after that.
+ * every request after that. A crawler that wants longer buys more days at
+ * once: `?days=N` on the sales page quotes N terms, and a proof for N times
+ * the price — however it was asked for — buys a pass that lasts N terms.
  *
  * Framework-agnostic: `handle(request)` takes a Fetch `Request` and resolves to
  * a `Response` to send, or null to let the request through. The adapters in
@@ -42,7 +44,8 @@ export { buildOffer, decodePayment, expectedFor, METHODS, verifyAndSettle } from
  * @param {string} [options.payTo]                 EVM address that receives the USDC
  * @param {number} [options.priceCents=100]
  * @param {string} [options.currency='USD']
- * @param {number} [options.passMinutes=1440]          a day
+ * @param {number} [options.passMinutes=1440]          a day: the term one payment buys
+ * @param {number} [options.maxDays=30]            the most terms one proof may buy at once
  * @param {string} [options.header='x-crawl-pass']
  * @param {string} [options.path='/crawl']         the sales page
  * @param {string[]} [options.openPaths]           extra paths a refused crawler may read
@@ -65,22 +68,45 @@ export function createGateway(options = {}) {
   const denied = compileCidrs(o.denyCidrs);
   const isOpen = (path) => openPaths.some((p) => (p.endsWith('/') ? path.startsWith(p) : path === p));
 
-  const price = `${(o.priceCents / 100).toFixed(2)} ${o.currency}`;
+  const money = (cents) => `${(cents / 100).toFixed(2)} ${o.currency}`;
+  const price = money(o.priceCents);
   const buyUrl = `${o.siteUrl}${o.path}`;
 
-  const offer = () =>
+  /**
+   * How many terms a request is asking to buy: `?days=N`, clamped to
+   * [1, maxDays]. Anything unparseable is one day, which is what the offer
+   * always meant before there was a way to ask for more.
+   */
+  const daysFrom = (request) => {
+    const raw = new URL(request.url).searchParams.get('days');
+    const n = Number.parseInt(raw ?? '', 10);
+    if (!Number.isFinite(n) || n < 1) return 1;
+    return Math.min(n, o.maxDays);
+  };
+
+  /** The offer for `days` terms: the same entries, `days` times the price. */
+  const offer = (days = 1) =>
     enabled
       ? buildOffer({
           payTo: o.payTo,
-          priceCents: o.priceCents,
+          priceCents: o.priceCents * days,
           resource: buyUrl,
-          description: `${o.passMinutes} minutes of crawl access to ${o.siteUrl}`,
+          description: `${days * o.passMinutes} minutes of crawl access to ${o.siteUrl}${days > 1 ? ` (${days} × ${o.passMinutes})` : ''}`,
         })
       : { x402Version: 2, accepts: [] };
 
-  const receipt = (extra = {}) => ({
-    ...offer(),
-    pass: { price, minutes: o.passMinutes, header: o.header, buy: buyUrl },
+  const receipt = (days = 1, extra = {}) => ({
+    ...offer(days),
+    pass: {
+      price,
+      minutes: o.passMinutes,
+      days,
+      total: money(o.priceCents * days),
+      maxDays: o.maxDays,
+      header: o.header,
+      buy: days > 1 ? `${buyUrl}?days=${days}` : buyUrl,
+      buyDays: `${buyUrl}?days=<n>`,
+    },
     ...extra,
   });
 
@@ -96,12 +122,15 @@ export function createGateway(options = {}) {
   const html = (body, status) =>
     new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8', ...noStore } });
 
-  const pageCtx = () => ({
+  const pageCtx = (days = 1) => ({
+    days,
+    total: money(o.priceCents * days),
     siteName: o.siteName,
     siteUrl: o.siteUrl,
     buyUrl,
     price,
     minutes: o.passMinutes,
+    maxDays: o.maxDays,
     header: o.header,
     enabled,
     offer: offer(),
@@ -129,14 +158,35 @@ export function createGateway(options = {}) {
   async function sell(request) {
     const ua = request.headers.get('user-agent') ?? '';
     const proofHeader = request.headers.get('x-payment');
+    const asked = daysFrom(request);
 
     if (proofHeader) {
-      if (!enabled) return json(receipt({ error: 'Payments are not switched on here.' }), 402);
+      if (!enabled) return json(receipt(asked, { error: 'Payments are not switched on here.' }), 402);
       const payment = decodePayment(proofHeader);
-      if (!payment) return json(receipt({ error: 'X-PAYMENT is not base64 JSON.' }), 402);
-      const current = offer();
-      const expected = expectedFor(payment, current);
-      if (!expected) return json(receipt({ error: 'Proof does not match an offered network.' }), 402);
+      if (!payment) return json(receipt(asked, { error: 'X-PAYMENT is not base64 JSON.' }), 402);
+      const unit = expectedFor(payment, offer(1));
+      if (!unit) return json(receipt(asked, { error: 'Proof does not match an offered network.' }), 402);
+
+      /*
+       * The money decides the term, not the URL. A proof is an authorization
+       * for an exact value, and the value the buyer signed is what CoinPay
+       * will move -- so the days it buys are read off the proof: a whole
+       * number of day-prices, at most maxDays. `?days=` shaped the offer the
+       * buyer read; if they then signed for a different multiple, they get
+       * what they paid for, and if they signed for something that is not a
+       * multiple they get nothing, before anyone is charged.
+       */
+      const days = daysPaid(paidValueOf(payment), unit.amount, o.maxDays);
+      if (!days) {
+        return json(
+          receipt(asked, {
+            error: `Pay a whole number of days: ${unit.amount} per day in the token's smallest unit, up to ${o.maxDays} days. Add ?days=<n> to ${buyUrl} for the offer.`,
+          }),
+          402,
+        );
+      }
+      const expected = expectedFor(payment, offer(days));
+      const term = days * o.passMinutes * 60;
 
       const now = Math.floor(Date.now() / 1000);
       const coinpay = { apiKey: o.coinpay.apiKey, baseUrl: o.coinpay.baseUrl, fetch: o.fetch };
@@ -145,7 +195,7 @@ export function createGateway(options = {}) {
       let expiresAt = null;
       let replayed = false;
       if (result.ok) {
-        expiresAt = now + o.passMinutes * 60;
+        expiresAt = now + term;
       } else if (result.replay) {
         /*
          * Paid once, lost the answer, asked again with the same proof. Answered
@@ -158,12 +208,12 @@ export function createGateway(options = {}) {
         const paid = await settleAgain(payment, coinpay);
         const validBefore = validBeforeOf(payment);
         if (paid && validBefore) {
-          expiresAt = Math.min(now + o.passMinutes * 60, validBefore + o.passMinutes * 60);
+          expiresAt = Math.min(now + term, validBefore + term);
           replayed = true;
         }
       }
       if (!expiresAt || expiresAt <= now) {
-        return json(receipt({ error: result.reason ?? 'Payment could not be settled.' }), 402);
+        return json(receipt(days, { error: result.reason ?? 'Payment could not be settled.' }), 402);
       }
 
       const ref = nonceOf(payment) ?? result.ref ?? null;
@@ -178,6 +228,8 @@ export function createGateway(options = {}) {
             expiresAt: expires,
             userAgent: ua,
             priceCents: o.priceCents,
+            days,
+            totalCents: o.priceCents * days,
             currency: o.currency,
           });
         } catch {
@@ -189,6 +241,8 @@ export function createGateway(options = {}) {
           ok: true,
           pass: pass.token,
           expires_at: expires,
+          days,
+          minutes: days * o.passMinutes,
           header: o.header,
           replayed,
           use: `curl -H "${o.header}: ${pass.token}" ${o.siteUrl}/`,
@@ -198,8 +252,8 @@ export function createGateway(options = {}) {
       );
     }
 
-    if (wantsHtml(request.headers.get('accept'))) return html(o.page(pageCtx()), 402);
-    return json(receipt({ error: `Payment required for training crawlers. Read ${buyUrl} for how.` }), 402);
+    if (wantsHtml(request.headers.get('accept'))) return html(o.page(pageCtx(asked)), 402);
+    return json(receipt(asked, { error: `Payment required for training crawlers. Read ${buyUrl} for how.` }), 402);
   }
 
   /**
@@ -253,6 +307,42 @@ export function createGateway(options = {}) {
 /** Whether the caller would rather read a page than a JSON offer. */
 export const wantsHtml = (accept = '') => String(accept ?? '').toLowerCase().includes('text/html');
 
+/** The value a proof authorizes, in the token's smallest unit, or null. */
+export function paidValueOf(payment) {
+  const raw = payment?.payload?.authorization?.value;
+  if (raw === undefined || raw === null || raw === '') return null;
+  try {
+    const value = BigInt(raw);
+    return value > 0n ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How many terms a paid value buys at `unit` per term: a whole number in
+ * [1, maxDays], or 0 when it is not one. Integer arithmetic on the smallest
+ * unit, so a price that is not a round number of cents still divides exactly.
+ *
+ * @param {bigint|null} value
+ * @param {string|number|bigint} unit
+ * @param {number} maxDays
+ * @returns {number}
+ */
+export function daysPaid(value, unit, maxDays) {
+  if (value === null) return 0;
+  let per;
+  try {
+    per = BigInt(unit);
+  } catch {
+    return 0;
+  }
+  if (per <= 0n || value % per !== 0n) return 0;
+  const days = value / per;
+  if (days < 1n || days > BigInt(maxDays)) return 0;
+  return Number(days);
+}
+
 function normalise(options) {
   const siteUrl = String(options.siteUrl ?? '').replace(/\/+$/, '');
   if (!siteUrl) throw new Error('createGateway needs siteUrl');
@@ -268,6 +358,7 @@ function normalise(options) {
     priceCents: Number.isFinite(options.priceCents) ? options.priceCents : 100,
     currency: options.currency ?? 'USD',
     passMinutes: Number.isFinite(options.passMinutes) && options.passMinutes > 0 ? options.passMinutes : 1440,
+    maxDays: Number.isInteger(options.maxDays) && options.maxDays >= 1 ? options.maxDays : 30,
     header: String(options.header ?? 'x-crawl-pass').toLowerCase(),
     path: options.path ?? '/crawl',
     openPaths: options.openPaths ?? [],

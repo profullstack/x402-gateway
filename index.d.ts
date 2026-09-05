@@ -7,7 +7,12 @@ export interface Sale {
   token: string;
   expiresAt: string;
   userAgent: string;
+  /** Per term (`passMinutes`). */
   priceCents: number;
+  /** Terms this proof bought. */
+  days: number;
+  /** `priceCents * days`. */
+  totalCents: number;
   currency: string;
 }
 
@@ -15,8 +20,14 @@ export interface PageContext {
   siteName: string;
   siteUrl: string;
   buyUrl: string;
+  /** Per day, e.g. "1.00 USD". */
   price: string;
   minutes: number;
+  /** Days this page's offer quotes (`?days=`), 1 by default. */
+  days: number;
+  /** `price` times `days`. */
+  total: string;
+  maxDays: number;
   header: string;
   enabled: boolean;
   offer: Offer;
@@ -37,8 +48,10 @@ export interface GatewayOptions {
   /** Default 100 ($1). */
   priceCents?: number;
   currency?: string;
-  /** What a payment buys. Default 1440 (a day). */
+  /** What one price buys. Default 1440 (a day). */
   passMinutes?: number;
+  /** The most terms one proof may buy at once (`?days=` and paid multiples are clamped to it). Default 30. */
+  maxDays?: number;
   /** Request header the pass is presented in. Default 'x-crawl-pass'. */
   header?: string;
   /** The sales page. Default '/crawl'. */
@@ -133,6 +146,10 @@ export const X402_METHODS: typeof METHODS;
 export function buildOffer(args: { payTo: string; priceCents: number; resource: string; description?: string; maxTimeoutSeconds?: number; methods?: typeof METHODS }): Offer;
 export function decodePayment(header: string | null | undefined): Record<string, unknown> | null;
 export function expectedFor(payment: unknown, offer: Offer): { amount: string; resource: string; payTo: string; asset: string } | null;
+/** The value a proof authorizes, in the token's smallest unit, or null. */
+export function paidValueOf(payment: unknown): bigint | null;
+/** How many terms `value` buys at `unit` per term: a whole number in [1, maxDays], or 0. */
+export function daysPaid(value: bigint | null, unit: string | number | bigint, maxDays: number): number;
 export function verifyAndSettle(
   payment: unknown,
   expected: { amount: string; resource: string; payTo: string; asset: string },
