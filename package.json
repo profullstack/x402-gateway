@@ -1,0 +1,42 @@
+{
+  "name": "@profullstack/x402-gateway",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Sell crawl access to AI training crawlers by the day over x402, settled by CoinPay. One middleware: 402 with an offer, a sales page with CLI instructions, signed passes, and a robots.txt that keeps search crawlers welcome.",
+  "keywords": [
+    "x402",
+    "402",
+    "payment-required",
+    "crawler",
+    "ai-crawler",
+    "gptbot",
+    "claudebot",
+    "meta-externalagent",
+    "robots.txt",
+    "coinpay",
+    "usdc",
+    "hono",
+    "nextjs",
+    "middleware",
+    "paywall"
+  ],
+  "repository": { "type": "git", "url": "git+https://github.com/profullstack/x402-gateway.git" },
+  "homepage": "https://github.com/profullstack/x402-gateway#readme",
+  "bugs": { "url": "https://github.com/profullstack/x402-gateway/issues" },
+  "license": "MIT",
+  "author": "Profullstack, LLC",
+  "exports": {
+    ".": { "types": "./index.d.ts", "import": "./src/index.js" },
+    "./hono": { "types": "./index.d.ts", "import": "./src/hono.js" },
+    "./next": { "types": "./index.d.ts", "import": "./src/next.js" },
+    "./robots": { "types": "./index.d.ts", "import": "./src/robots.js" },
+    "./agents": { "types": "./index.d.ts", "import": "./src/agents.js" }
+  },
+  "types": "./index.d.ts",
+  "files": ["src", "index.d.ts", "README.md", "LICENSE"],
+  "engines": { "node": ">=20.11" },
+  "sideEffects": false,
+  "scripts": {
+    "test": "node --test"
+  }
+}
