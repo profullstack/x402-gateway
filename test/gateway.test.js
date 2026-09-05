@@ -347,7 +347,7 @@ describe('the gate', () => {
 describe('crawlers that do not say who they are', () => {
   const OVH = ['51.38.0.0/16', '54.38.0.0/16', '141.94.0.0/16'];
   const from = (ip, extra = {}) =>
-    req('/topics/x', { ua: CHROME, ...extra, headers: { 'x-forwarded-for': `${ip}, 10.0.0.1`, ...(extra.headers ?? {}) } });
+    req('/topics/x', { ua: CHROME, ...extra, headers: { 'x-forwarded-for': `10.0.0.1, ${ip}`, ...(extra.headers ?? {}) } });
 
   it('parses CIDRs and matches addresses, and drops what it cannot read', () => {
     const c = compileCidrs([...OVH, 'garbage', '1.2.3.4', '300.1.1.1/8', '10.0.0.0/33']);
@@ -362,9 +362,12 @@ describe('crawlers that do not say who they are', () => {
     assert.equal(inCidrs('9.9.9.9', compileCidrs(['0.0.0.0/0'])), true);
   });
 
-  it('reads the client address the way the edge writes it', () => {
-    assert.equal(clientIp(req('/', { headers: { 'x-forwarded-for': '203.0.113.9, 10.1.1.1' } })), '203.0.113.9');
-    assert.equal(clientIp(req('/', { headers: { 'x-real-ip': '203.0.113.10' } })), '203.0.113.10');
+  it('reads the client address from the hop our own edge appended, never one the client seeded', () => {
+    // A client that sends its own X-Forwarded-For puts a lie first; the edge appends the truth.
+    assert.equal(clientIp(req('/', { headers: { 'x-forwarded-for': '1.1.1.1, 203.0.113.9' } })), '203.0.113.9');
+    assert.equal(clientIp(req('/', { headers: { 'x-forwarded-for': '203.0.113.9' } })), '203.0.113.9');
+    assert.equal(clientIp(req('/', { headers: { 'x-real-ip': '203.0.113.10', 'x-forwarded-for': '1.1.1.1, 5.5.5.5' } })), '203.0.113.10');
+    assert.equal(clientIp(req('/', { headers: { 'x-forwarded-for': ' , ' } })), '');
     assert.equal(clientIp(req('/')), '');
   });
 
