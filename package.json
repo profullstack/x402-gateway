@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/x402-gateway",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Sell crawl access to AI training crawlers by the day over x402, settled by CoinPay. One middleware: 402 with an offer, a sales page with CLI instructions, signed passes, and a robots.txt that keeps search crawlers welcome.",
   "keywords": [
@@ -30,7 +30,8 @@
     "./hono": { "types": "./index.d.ts", "import": "./src/hono.js" },
     "./next": { "types": "./index.d.ts", "import": "./src/next.js" },
     "./robots": { "types": "./index.d.ts", "import": "./src/robots.js" },
-    "./agents": { "types": "./index.d.ts", "import": "./src/agents.js" }
+    "./agents": { "types": "./index.d.ts", "import": "./src/agents.js" },
+    "./edge": { "types": "./index.d.ts", "import": "./src/edge.js" }
   },
   "types": "./index.d.ts",
   "files": ["src", "index.d.ts", "README.md", "LICENSE"],

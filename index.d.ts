@@ -49,6 +49,12 @@ export interface GatewayOptions {
   retrieval?: string[];
   /** Who is charged. Default: the training list, substring-matched on the user agent. */
   isPaidAgent?: (userAgent: string) => boolean;
+  /** IPv4 CIDRs answered 403 before anything else (a VPS fleet's provider ranges). */
+  denyCidrs?: string[];
+  /** Charge a request that claims "Chrome/…" but lacks the Sec-Fetch-Mode header every Chromium sends. Default false. */
+  chargeSpoofedBrowsers?: boolean;
+  /** Requests never charged, e.g. ones carrying a signed-in cookie. */
+  exempt?: (request: Request) => boolean;
   /** Pass signing secret. Defaults to the CoinPay key. */
   secret?: string;
   page?: (ctx: PageContext) => string;
@@ -109,6 +115,14 @@ export const RETRIEVAL_AGENTS: string[];
 export function isTrainingAgent(userAgent?: string | null, agents?: string[]): boolean;
 
 export function robotsTxt(options: RobotsOptions & { siteUrl: string }): string;
+
+/** ./edge (also re-exported from the root) */
+export interface Cidr { base: number; mask: number; text: string }
+export function parseCidr(cidr: string): Cidr | null;
+export function compileCidrs(list?: string[]): Cidr[];
+export function inCidrs(ip: string, compiled: Cidr[]): boolean;
+export function clientIp(request: Request): string;
+export function isSpoofedBrowser(request: Request): boolean;
 export function renderPage(ctx: PageContext): string;
 
 export function mintPass(args: { secret: string; ref: string | null; expiresAt: number; now?: number }): Promise<{ token: string; expiresAt: number; ref: string | null }>;

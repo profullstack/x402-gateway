@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { isTrainingAgent, RETRIEVAL_AGENTS, TRAINING_AGENTS } from '../src/agents.js';
+import { clientIp, compileCidrs, inCidrs, isSpoofedBrowser, parseCidr } from '../src/edge.js';
 import { createGateway, wantsHtml } from '../src/index.js';
 import { x402Gateway } from '../src/hono.js';
 import { robotsRoute, x402Proxy } from '../src/next.js';
@@ -340,6 +341,78 @@ describe('the gate', () => {
     assert.equal(wantsHtml('text/html,application/xhtml+xml'), true);
     assert.equal(wantsHtml('application/json'), false);
     assert.equal(wantsHtml(undefined), false);
+  });
+});
+
+describe('crawlers that do not say who they are', () => {
+  const OVH = ['51.38.0.0/16', '54.38.0.0/16', '141.94.0.0/16'];
+  const from = (ip, extra = {}) =>
+    req('/topics/x', { ua: CHROME, ...extra, headers: { 'x-forwarded-for': `${ip}, 10.0.0.1`, ...(extra.headers ?? {}) } });
+
+  it('parses CIDRs and matches addresses, and drops what it cannot read', () => {
+    const c = compileCidrs([...OVH, 'garbage', '1.2.3.4', '300.1.1.1/8', '10.0.0.0/33']);
+    assert.equal(c.length, 4);
+    assert.equal(inCidrs('51.38.200.7', c), true);
+    assert.equal(inCidrs('51.39.0.1', c), false);
+    assert.equal(inCidrs('1.2.3.4', c), true);
+    assert.equal(inCidrs('1.2.3.5', c), false);
+    assert.equal(inCidrs('not an ip', c), false);
+    assert.equal(inCidrs('', c), false);
+    assert.equal(parseCidr('0.0.0.0/0').mask, 0);
+    assert.equal(inCidrs('9.9.9.9', compileCidrs(['0.0.0.0/0'])), true);
+  });
+
+  it('reads the client address the way the edge writes it', () => {
+    assert.equal(clientIp(req('/', { headers: { 'x-forwarded-for': '203.0.113.9, 10.1.1.1' } })), '203.0.113.9');
+    assert.equal(clientIp(req('/', { headers: { 'x-real-ip': '203.0.113.10' } })), '203.0.113.10');
+    assert.equal(clientIp(req('/')), '');
+  });
+
+  it('refuses a denied range with a tiny 403 before anything else, even a paying pass or the sales page', async () => {
+    const { gateway, cp } = gatewayFor({ denyCidrs: OVH });
+    const res = await gateway.handle(from('54.38.1.2'));
+    assert.equal(res.status, 403);
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+    assert.equal((await gateway.handle(from('54.38.1.2', { headers: { 'x-payment': proof() } }))).status, 403);
+    assert.equal(cp.calls.length, 0);
+    assert.equal((await gateway.handle(req('/crawl', { headers: { 'x-forwarded-for': '141.94.9.9' } }))).status, 403);
+    // A neighbour outside the range, same UA, is a person.
+    assert.equal(await gateway.handle(from('51.39.0.1')), null);
+  });
+
+  it('knows a copied Chrome string from Chrome', () => {
+    assert.equal(isSpoofedBrowser(req('/', { ua: CHROME })), true, 'no Sec-Fetch-Mode at all');
+    assert.equal(isSpoofedBrowser(req('/', { ua: CHROME, headers: { 'sec-fetch-mode': 'navigate' } })), false);
+    assert.equal(isSpoofedBrowser(req('/', { ua: 'Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0' })), false, 'Firefox is not judged');
+    assert.equal(isSpoofedBrowser(req('/', { ua: 'curl/8.0' })), false, 'an honest client is not judged either');
+    assert.equal(isSpoofedBrowser(req('/', { ua: META })), false, 'a declared crawler is charged by name, not by this');
+  });
+
+  it('charges a spoofed browser only when asked to, and never one that answers the question', async () => {
+    const quiet = gatewayFor().gateway;
+    assert.equal(await quiet.handle(req('/topics/x', { ua: CHROME })), null, 'off by default');
+
+    const { gateway } = gatewayFor({ chargeSpoofedBrowsers: true });
+    const res = await gateway.handle(req('/topics/x', { ua: CHROME, accept: 'application/json' }));
+    assert.equal(res.status, 402);
+    assert.equal((await res.json()).accepts.length, 3);
+    const real = req('/topics/x', { ua: CHROME, headers: { 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'none' } });
+    assert.equal(await gateway.handle(real), null);
+    // A spoofed browser that pays gets a pass like anyone else.
+    const paid = await gateway.handle(req('/topics/x', { ua: CHROME, headers: { 'x-payment': proof({ nonce: '0xs1' }) } }));
+    assert.equal(paid.status, 200);
+    const { pass } = await paid.json();
+    assert.equal(await gateway.handle(req('/topics/y', { ua: CHROME, headers: { 'x-crawl-pass': pass } })), null);
+  });
+
+  it('exempts what the site says to exempt, before any charge', async () => {
+    const { gateway } = gatewayFor({
+      chargeSpoofedBrowsers: true,
+      exempt: (r) => (r.headers.get('cookie') ?? '').includes('signed_in=1'),
+    });
+    assert.equal(await gateway.handle(req('/topics/x', { ua: CHROME, headers: { cookie: 'signed_in=1' } })), null);
+    assert.equal(await gateway.handle(req('/topics/x', { ua: META, headers: { cookie: 'signed_in=1' } })), null, 'even a named crawler with the cookie');
+    assert.equal((await gateway.handle(req('/topics/x', { ua: META }))).status, 402);
   });
 });
 
