@@ -389,6 +389,17 @@ describe('crawlers that do not say who they are', () => {
     assert.equal(isSpoofedBrowser(req('/', { ua: 'Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0' })), false, 'Firefox is not judged');
     assert.equal(isSpoofedBrowser(req('/', { ua: 'curl/8.0' })), false, 'an honest client is not judged either');
     assert.equal(isSpoofedBrowser(req('/', { ua: META })), false, 'a declared crawler is charged by name, not by this');
+    // The evergreen search crawlers claim Chrome and send no Sec-Fetch-Mode.
+    const GOOGLEBOT = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; +http://www.google.com/bot.html) Chrome/145.0.0.0 Safari/537.36';
+    const BINGBOT = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm) Chrome/145.0.0.0 Safari/537.36';
+    const APPLEBOT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1.1 Safari/605.1.15 (Applebot/0.1; +http://www.apple.com/go/applebot)';
+    for (const ua of [GOOGLEBOT, BINGBOT, APPLEBOT]) assert.equal(isSpoofedBrowser(req('/', { ua })), false, ua.slice(0, 40));
+  });
+
+  it('never charges Googlebot, with or without the spoof check', async () => {
+    const GOOGLEBOT = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; +http://www.google.com/bot.html) Chrome/145.0.0.0 Safari/537.36';
+    const { gateway } = gatewayFor({ chargeSpoofedBrowsers: true });
+    assert.equal(await gateway.handle(req('/topics/x', { ua: GOOGLEBOT })), null);
   });
 
   it('charges a spoofed browser only when asked to, and never one that answers the question', async () => {

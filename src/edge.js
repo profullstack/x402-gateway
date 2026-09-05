@@ -85,6 +85,17 @@ export function clientIp(request) {
 const CLAIMS_CHROMIUM = /\bChrome\/\d+/;
 
 /**
+ * A crawler that says so. Googlebot's evergreen string is
+ * "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible;
+ * Googlebot/2.1; +http://www.google.com/bot.html) Chrome/W.X.Y.Z Safari/537.36"
+ * -- it claims Chrome, it sends no Sec-Fetch-Mode, and it is the last thing
+ * on earth to charge. Bingbot is built the same way. Anything that declares
+ * itself is judged by the lists, never by this check: the whole point of the
+ * check is the client that declares nothing.
+ */
+const DECLARES_ITSELF = /compatible;|\bbot\b|bot\/|crawler|spider|slurp/i;
+
+/**
  * A request that claims a Chromium user agent but carries none of the
  * fetch-metadata headers Chromium cannot omit.
  *
@@ -97,5 +108,6 @@ const CLAIMS_CHROMIUM = /\bChrome\/\d+/;
 export function isSpoofedBrowser(request) {
   const ua = request.headers.get('user-agent') ?? '';
   if (!CLAIMS_CHROMIUM.test(ua)) return false;
+  if (DECLARES_ITSELF.test(ua)) return false;
   return !request.headers.has('sec-fetch-mode');
 }
