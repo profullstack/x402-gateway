@@ -93,7 +93,15 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 | `contact` | | mailto: or URL for bulk deals |
 | `onSale` | | `({ payer, ref, token, expiresAt, userAgent, priceCents, currency }) => …`, for accounting |
 
+| `denyCidrs` | `[]` | IPv4 ranges answered with a tiny `403` before anything else. For a VPS fleet that spoofs a browser: hosting ranges serve no readers. |
+| `chargeSpoofedBrowsers` | `false` | charge a request that claims `Chrome/…` but sends no `Sec-Fetch-Mode`. Every Chromium since 76, headless included, sends it on every request and no script or extension can remove it, so its absence means an HTTP client with a copied string. Firefox and Safari are not judged. |
+| `exempt` | | `(request) => boolean`, never charged: e.g. a request carrying your signed-in cookie |
+
 Without `coinpay.apiKey` and `payTo` the gateway still answers training crawlers with 402 and the page says payments are off. Nothing is sold, but nothing is given away either.
+
+## Crawlers that do not say who they are
+
+The lists catch crawlers that name themselves. Two do not: a VPS fleet wearing a browser string, and a residential-proxy rotation cycling a few Chrome strings across hundreds of addresses. `denyCidrs` handles the first (`['51.38.0.0/16', '54.38.0.0/16', …]` for one provider's ranges); `chargeSpoofedBrowsers` handles both by asking a question only a browser can answer. A request that answers it is left alone. One that cannot gets the same 402 as GPTBot, which costs the site a hash instead of a render.
 
 ## How the money moves
 

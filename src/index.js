@@ -1,4 +1,5 @@
 import { isTrainingAgent, RETRIEVAL_AGENTS, TRAINING_AGENTS } from './agents.js';
+import { clientIp, compileCidrs, inCidrs, isSpoofedBrowser } from './edge.js';
 import { renderPage } from './page.js';
 import { mintPass, readPass } from './pass.js';
 import { robotsTxt } from './robots.js';
@@ -14,6 +15,7 @@ import {
 } from './x402.js';
 
 export { isTrainingAgent, RETRIEVAL_AGENTS, TRAINING_AGENTS } from './agents.js';
+export { clientIp, compileCidrs, inCidrs, isSpoofedBrowser, parseCidr } from './edge.js';
 export { renderPage } from './page.js';
 export { mintPass, readPass } from './pass.js';
 export { robotsTxt } from './robots.js';
@@ -45,6 +47,9 @@ export { buildOffer, decodePayment, expectedFor, METHODS, verifyAndSettle } from
  * @param {string} [options.path='/crawl']         the sales page
  * @param {string[]} [options.openPaths]           extra paths a refused crawler may read
  * @param {(ua: string) => boolean} [options.isPaidAgent]
+ * @param {string[]} [options.denyCidrs]           IPv4 ranges answered 403 before anything else, e.g. a VPS fleet's provider
+ * @param {boolean} [options.chargeSpoofedBrowsers=false]  charge a "Chrome/…" request that lacks the Sec-Fetch-Mode header every Chromium sends
+ * @param {(request: Request) => boolean} [options.exempt]  requests never charged, e.g. ones carrying a signed-in cookie
  * @param {string} [options.secret]                pass signing secret; defaults to the CoinPay key
  * @param {(ctx: object) => string} [options.page] custom sales page renderer
  * @param {string} [options.contact]               mailto: or URL for bulk deals
@@ -57,6 +62,7 @@ export function createGateway(options = {}) {
   const secret = o.secret || o.coinpay.apiKey || null;
 
   const openPaths = ['/robots.txt', o.path, '/security.txt', '/.well-known/', ...o.openPaths];
+  const denied = compileCidrs(o.denyCidrs);
   const isOpen = (path) => openPaths.some((p) => (p.endsWith('/') ? path.startsWith(p) : path === p));
 
   const price = `${(o.priceCents / 100).toFixed(2)} ${o.currency}`;
@@ -204,9 +210,26 @@ export function createGateway(options = {}) {
    * starts from the user agent.
    */
   async function handle(request) {
+    /*
+     * Addresses that serve no readers are refused before anything else, with
+     * a body small enough that refusing costs nothing. Not 402: there is no
+     * pass on sale to a hosting range that spoofs a browser, because whoever
+     * runs it has already declined to say who they are.
+     */
+    if (denied.length && inCidrs(clientIp(request), denied)) {
+      return new Response('Not available from this network.\n', {
+        status: 403,
+        headers: { 'content-type': 'text/plain; charset=utf-8', ...noStore },
+      });
+    }
+
     const path = new URL(request.url).pathname;
     if (path === o.path) return sell(request);
-    if (!o.isPaidAgent(request.headers.get('user-agent') ?? '')) return null;
+    if (o.exempt && o.exempt(request)) return null;
+    const pays =
+      o.isPaidAgent(request.headers.get('user-agent') ?? '') ||
+      (o.chargeSpoofedBrowsers && isSpoofedBrowser(request));
+    if (!pays) return null;
     if (isOpen(path)) return null;
 
     const token = passFrom(request);
@@ -248,6 +271,9 @@ function normalise(options) {
     header: String(options.header ?? 'x-crawl-pass').toLowerCase(),
     path: options.path ?? '/crawl',
     openPaths: options.openPaths ?? [],
+    denyCidrs: options.denyCidrs ?? [],
+    chargeSpoofedBrowsers: Boolean(options.chargeSpoofedBrowsers),
+    exempt: options.exempt ?? null,
     training,
     retrieval: options.retrieval ?? RETRIEVAL_AGENTS,
     isPaidAgent: options.isPaidAgent ?? ((ua) => isTrainingAgent(ua, training)),
