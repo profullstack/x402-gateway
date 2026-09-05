@@ -4,6 +4,8 @@ Sell crawl access to AI training crawlers, by the day, over [x402](https://x402.
 
 People read your site free. So do search engines and the retrieval crawlers behind AI answers, because they send readers back. A crawler that copies pages into a training corpus sends nobody back, so it pays: every page answers `402 Payment Required` with an x402 offer, paying the offer returns a signed pass, and the pass opens the site for a day.
 
+A crawler that wants longer buys more days in one payment. `?days=7` on the sales page quotes seven days at the daily price, and the days a proof buys are read off the value it authorizes, so paying seven times the price — however it was asked for — returns a pass that expires seven days out. `maxDays` caps how many one proof can buy.
+
 One middleware. No database. Runs in Node, Bun and at the edge.
 
 ```
@@ -82,7 +84,8 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 | `coinpay.apiKey` | | a **scoped** CoinPay key (`cp_live_…`, from the business's API Keys tab) with `payments:create`. The legacy business key is refused by CoinPay's x402 routes. |
 | `payTo` | | EVM address that receives the USDC, on Base, Polygon and Ethereum alike |
 | `priceCents` | `100` | |
-| `passMinutes` | `1440` | a day |
+| `passMinutes` | `1440` | a day: the term one price buys |
+| `maxDays` | `30` | the most terms one proof may buy at once |
 | `header` | `x-crawl-pass` | where the pass goes; `Authorization: Bearer` works too |
 | `path` | `/crawl` | the sales page |
 | `openPaths` | `[]` | extra paths a refused crawler may read (`robots.txt`, the sales page, `security.txt` and `.well-known/` always are) |
