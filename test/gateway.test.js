@@ -211,6 +211,37 @@ describe('the gate', () => {
     assert.match(page.headers.get('content-type'), /text\/html/);
   });
 
+  it('waits for onSale before answering, so a sale can be recorded', async () => {
+    /*
+     * The buyer's receipt must not go out before the sale is written down.
+     * A hook that is not waited for is a hook that loses the sale whenever the
+     * runtime stops the moment the response is sent, which is exactly what an
+     * edge function does. The JSDoc used to promise the opposite.
+     */
+    const order = [];
+    const { gateway } = gatewayFor({
+      onSale: async (sale) => {
+        await new Promise((r) => setTimeout(r, 30));
+        order.push(`recorded:${sale.payer}`);
+      },
+    });
+    const res = await gateway.handle(req('/events/1', { headers: { 'x-payment': proof({ nonce: '0xslow' }) } }));
+    order.push('answered');
+    assert.equal(res.status, 200);
+    assert.deepEqual(order, ['recorded:0xPAYER', 'answered']);
+  });
+
+  it('a failing onSale still sells the pass', async () => {
+    const { gateway } = gatewayFor({
+      onSale: async () => {
+        throw new Error('the database is down');
+      },
+    });
+    const res = await gateway.handle(req('/events/1', { headers: { 'x-payment': proof({ nonce: '0xboom' }) } }));
+    assert.equal(res.status, 200, 'accounting must never cost a buyer the pass it paid for');
+    assert.match((await res.json()).pass, /^cp_/);
+  });
+
   it('verifies, settles, mints a pass, and then honours it', async () => {
     const sales = [];
     const { gateway, cp } = gatewayFor({ onSale: (s) => sales.push(s) });
