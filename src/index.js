@@ -1,5 +1,6 @@
 import { isTrainingAgent, RETRIEVAL_AGENTS, TRAINING_AGENTS } from './agents.js';
 import { clientIp, compileCidrs, inCidrs, isSpoofedBrowser } from './edge.js';
+import { memoryQuotaStore, meters, normaliseQuota, quotaHeaders, spend } from './quota.js';
 import { renderPage } from './page.js';
 import { mintPass, readPass } from './pass.js';
 import { robotsTxt } from './robots.js';
@@ -20,6 +21,7 @@ export { renderPage } from './page.js';
 export { mintPass, readPass } from './pass.js';
 export { robotsTxt } from './robots.js';
 export { buildOffer, decodePayment, expectedFor, METHODS, verifyAndSettle } from './x402.js';
+export { memoryQuotaStore, normaliseQuota, quotaHeaders, spend } from './quota.js';
 
 /**
  * A gateway that sells crawl access to training crawlers, by the day, over x402.
@@ -119,10 +121,23 @@ export function createGateway(options = {}) {
       status,
       headers: { 'content-type': 'application/json; charset=utf-8', ...noStore, ...headers },
     });
-  const html = (body, status) =>
-    new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8', ...noStore } });
+  const html = (body, status, headers = {}) =>
+    new Response(body, {
+      status,
+      headers: { 'content-type': 'text/html; charset=utf-8', ...noStore, ...headers },
+    });
 
-  const pageCtx = (days = 1) => ({
+  const pageCtx = (days = 1, usage = null) => ({
+    quota: o.freeQuota
+      ? {
+          requests: o.freeQuota.requests,
+          windowSeconds: o.freeQuota.windowSeconds,
+          used: usage?.count ?? null,
+          resetSeconds: usage?.resetSeconds ?? null,
+          exceeded: Boolean(usage?.overLimit),
+        }
+      : null,
+    benefits: o.benefits,
     days,
     total: money(o.priceCents * days),
     siteName: o.siteName,
@@ -155,10 +170,14 @@ export function createGateway(options = {}) {
    * body and not the headers, and a crawler that wanted the page can fetch it
    * again a moment later with the pass.
    */
-  async function sell(request) {
+  async function sell(request, context = {}) {
     const ua = request.headers.get('user-agent') ?? '';
     const proofHeader = request.headers.get('x-payment');
     const asked = daysFrom(request);
+    // Present when the free allowance is what stopped this request, rather than
+    // the crawler lists. It changes what the 402 says, not what it costs.
+    const usage = context.usage ?? null;
+    const rateHeaders = usage ? quotaHeaders(o.freeQuota, usage) : {};
 
     if (proofHeader) {
       if (!enabled) return json(receipt(asked, { error: 'Payments are not switched on here.' }), 402);
@@ -252,7 +271,33 @@ export function createGateway(options = {}) {
       );
     }
 
-    if (wantsHtml(request.headers.get('accept'))) return html(o.page(pageCtx(asked)), 402);
+    if (wantsHtml(request.headers.get('accept'))) {
+      return html(o.page(pageCtx(asked, usage)), 402, rateHeaders);
+    }
+
+    if (usage) {
+      // Say what ran out, when it comes back, and what a pass costs, in that
+      // order. A caller reading this is deciding between waiting, rotating
+      // addresses, and paying, and the numbers are the argument.
+      return json(
+        receipt(asked, {
+          error:
+            `Free allowance used: ${o.freeQuota.requests} requests per ` +
+            `${o.freeQuota.windowSeconds}s. It resets in ${usage.resetSeconds}s. ` +
+            `A pass removes the limit for ${price} a day.`,
+          quota: {
+            requests: o.freeQuota.requests,
+            windowSeconds: o.freeQuota.windowSeconds,
+            used: usage.count,
+            resetSeconds: usage.resetSeconds,
+          },
+          ...(o.benefits ? { unlocks: o.benefits } : {}),
+        }),
+        402,
+        rateHeaders,
+      );
+    }
+
     return json(receipt(asked, { error: `Payment required for training crawlers. Read ${buyUrl} for how.` }), 402);
   }
 
@@ -280,15 +325,41 @@ export function createGateway(options = {}) {
     const path = new URL(request.url).pathname;
     if (path === o.path) return sell(request);
     if (o.exempt && o.exempt(request)) return null;
+
+    /*
+     * A valid pass is checked before anything else that could refuse, because
+     * a pass is the thing being sold: whoever holds one is neither charged as
+     * a crawler nor metered against the free allowance. It used to be read
+     * only after the crawler lists matched, which was fine while the lists
+     * were the only reason to refuse and is not now that a quota exists.
+     */
+    const token = passFrom(request);
+    const paid = Boolean(token && (await readPass(token, { secret })));
+    if (paid) return null;
+
     const pays =
       o.isPaidAgent(request.headers.get('user-agent') ?? '') ||
       (o.chargeSpoofedBrowsers && isSpoofedBrowser(request));
-    if (!pays) return null;
+    if (pays && !isOpen(path)) return sell(request);
     if (isOpen(path)) return null;
 
-    const token = passFrom(request);
-    if (token && (await readPass(token, { secret }))) return null;
-    return sell(request);
+    /*
+     * Everyone else gets the free allowance. Running out is answered with a
+     * price rather than a 429: the caller has just shown it wants more than
+     * the free tier and is still holding the request, which is the best moment
+     * this site will ever get to sell it a pass.
+     */
+    if (o.freeQuota && meters(o.freeQuota, path)) {
+      const key = o.freeQuota.identify ? o.freeQuota.identify(request) : clientIp(request);
+      const usage = await spend(o.freeQuota, key);
+      // Under the limit the request carries on untouched. `handle` answers with
+      // a Response or nothing at all, and quietly growing that contract to
+      // smuggle headers out would break every adapter that checks it for truth.
+      // The allowance is advertised on the 402, which is where it is read.
+      if (usage?.overLimit) return sell(request, { usage });
+    }
+
+    return null;
   }
 
   return {
@@ -372,6 +443,8 @@ function normalise(options) {
     page: options.page ?? renderPage,
     contact: options.contact ?? '',
     onSale: options.onSale ?? null,
+    freeQuota: normaliseQuota(options.freeQuota),
+    benefits: Array.isArray(options.benefits) ? options.benefits : null,
     fetch: options.fetch ?? globalThis.fetch,
   };
 }

@@ -58,7 +58,43 @@ export function renderPage(ctx) {
     days = 1,
     total = price,
     maxDays = 30,
+    quota = null,
+    benefits = null,
   } = ctx;
+
+  /*
+   * Two audiences reach this page and they need different first sentences. A
+   * training crawler is here because it is on a list. A heavy reader is here
+   * because it ran out of the free allowance, and telling that one it is a
+   * training crawler is both wrong and insulting. The price is the same; the
+   * argument is not.
+   */
+  const throttled = Boolean(quota?.exceeded);
+  const headline = throttled
+    ? 'You have used up the free allowance.'
+    : 'Training crawlers pay for access here.';
+  const opening = throttled
+    ? `<p class="mut">${esc(String(quota.requests))} requests every ${esc(String(quota.windowSeconds))} seconds are free, no key and no account, and that is not changing. ` +
+      `You have gone past it${quota.resetSeconds ? `, and it resets in ${esc(String(quota.resetSeconds))} seconds` : ''}. ` +
+      `A pass lifts the limit rather than waiting it out.</p>`
+    : `<p class="mut">People read <a href="${esc(siteUrl)}">${esc(siteName)}</a> free. So do search engines and the retrieval crawlers behind AI answers, because they send readers back. A crawler that copies pages into a training corpus sends nobody back, so it pays for the time it spends.</p>`;
+
+  /*
+   * Said plainly because it is the honest argument and the one that actually
+   * lands. Rotating addresses to dodge a free-tier limit is not free: the
+   * bandwidth is metered and billed by the gigabyte, and a crawl big enough to
+   * be worth rotating for costs more in proxies than the pass does. Anyone
+   * weighing the two should be able to see that from here.
+   */
+  const arithmetic = throttled
+    ? `<h2>Before you reach for a proxy pool</h2>
+<p class="mut">Spreading the same crawl over rotating addresses works, and it is the expensive way to do this. Residential bandwidth is sold by the gigabyte, you still fetch every page one at a time, and the bill starts on the first day. A pass is ${esc(price)} a day, flat, with no rotation to maintain and nothing to keep working. We would rather sell you access than play that game, which is why the limit answers with a price instead of a refusal.</p>`
+    : '';
+
+  const unlocks =
+    benefits && benefits.length
+      ? `<h2>What a pass gets you</h2>\n<ul>\n${benefits.map((b) => `  <li>${esc(b)}</li>`).join('\n')}\n</ul>`
+      : '';
   const window =
     minutes === 1440
       ? 'one day'
@@ -82,8 +118,8 @@ export function renderPage(ctx) {
 </head>
 <body>
 <main>
-<h1>Training crawlers pay for access here.</h1>
-<p class="mut">People read <a href="${esc(siteUrl)}">${esc(siteName)}</a> free. So do search engines and the retrieval crawlers behind AI answers, because they send readers back. A crawler that copies pages into a training corpus sends nobody back, so it pays for the time it spends.</p>
+<h1>${esc(headline)}</h1>
+${opening}
 
 <div class="price">${esc(days > 1 ? total : price)} <span class="mut" style="font-size:1rem;font-weight:400">for ${esc(days > 1 ? `${days} × ${window}` : window)} of requests</span></div>
 ${
@@ -96,6 +132,9 @@ ${
     ? ''
     : '<p><strong>Payments are not switched on here yet.</strong> The offer below is empty until the operator configures a payout address, so for now this crawler is simply refused.</p>'
 }
+
+${unlocks}
+${arithmetic}
 
 <h2>How it works</h2>
 <ol>

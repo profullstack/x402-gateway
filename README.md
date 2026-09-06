@@ -102,6 +102,61 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 
 Without `coinpay.apiKey` and `payTo` the gateway still answers training crawlers with 402 and the page says payments are off. Nothing is sold, but nothing is given away either.
 
+## A free allowance that sells instead of refusing
+
+Named crawlers are one problem. The other is an ordinary client hammering the
+site far past what a reader would. The usual answer is `429 Too Many Requests`,
+which tells them to go away. That is the right answer when you have nothing to
+sell. Here you do.
+
+```js
+createGateway({
+  siteUrl: 'https://your-site.com',
+  coinpay: { apiKey: process.env.COINPAY_X402_KEY },
+  payTo: process.env.CRAWL_PAY_TO,
+
+  freeQuota: 100,                    // 100 requests a minute, free, no account
+  benefits: [
+    'No rate limit',
+    'Bulk export endpoint',
+    'Every field, not just the summary',
+  ],
+});
+```
+
+Past the allowance the gateway answers `402` with the offer, the RateLimit
+headers, and a body that says what ran out, when it comes back, and what a pass
+costs. The moment a caller runs out of free requests is the best sales pitch the
+site will ever get: it has just demonstrated it wants more than the free tier
+and is still holding the request.
+
+`freeQuota` takes `{ requests, windowSeconds, paths, identify, store }`. A pass
+is checked before the allowance, so a paying caller is never metered. The sales
+page, `robots.txt` and `.well-known/` stay reachable when the allowance is gone,
+because being unable to reach the page that sells the fix would be the worst
+possible failure of a throttle that exists to sell something.
+
+### On rotating addresses to get around it
+
+The default identity is the caller's address, and a proxy rotation defeats it.
+That is not a hole to be patched, because the arithmetic already argues for
+paying:
+
+- Residential proxy bandwidth is sold **by the gigabyte**, and a crawl big
+  enough to be worth rotating for passes a dollar on the first day.
+- A rotation still fetches every page one at a time. It buys no speed.
+- A pass is a flat price with nothing to maintain and nothing to keep working.
+
+So the throttled page makes that case in as many words rather than pretending to
+be undefeatable. Detection is a race you re-run every time someone changes
+tactics. Price is not: the better your free tier and the clearer your paid one,
+the less anyone bothers. Set `benefits` to the things a rotation genuinely
+cannot get, a bulk endpoint above all, and evasion stops being worth the effort
+rather than being blocked.
+
+Where you *can* identify a caller properly, do: pass `identify` and key on an API
+key or an account, and the allowance becomes exact.
+
 ## Crawlers that do not say who they are
 
 The lists catch crawlers that name themselves. Two do not: a VPS fleet wearing a browser string, and a residential-proxy rotation cycling a few Chrome strings across hundreds of addresses. `denyCidrs` handles the first (`['51.38.0.0/16', '54.38.0.0/16', …]` for one provider's ranges); `chargeSpoofedBrowsers` handles both by asking a question only a browser can answer. A request that answers it is left alone. One that cannot gets the same 402 as GPTBot, which costs the site a hash instead of a render.
