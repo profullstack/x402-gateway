@@ -74,8 +74,50 @@ export interface GatewayOptions {
   contact?: string;
   /** Awaited before the buyer's receipt is sent, and its errors are swallowed: a sale is recorded, and a recording failure never costs the buyer the pass. */
   onSale?: (sale: Sale) => void | Promise<void>;
+  /**
+   * A free allowance for ordinary callers, after which the gateway answers 402
+   * with the offer instead of letting the request through. A bare number means
+   * that many requests per minute. A valid pass is never metered.
+   */
+  freeQuota?: number | FreeQuotaOptions;
+  /** What a pass unlocks, listed on the sales page and in the 402 body. */
+  benefits?: string[];
   fetch?: typeof fetch;
 }
+
+export interface QuotaHit {
+  /** Requests in the current window, including this one. */
+  count: number;
+  /** Seconds until the window rolls over. */
+  resetSeconds: number;
+}
+
+/** Somewhere to count requests. Supply one to share an allowance across a fleet. */
+export interface QuotaStore {
+  hit(key: string, windowSeconds: number): QuotaHit | Promise<QuotaHit>;
+}
+
+export interface FreeQuotaOptions {
+  /** Free requests per window. */
+  requests: number;
+  /** Window length. Default 60. */
+  windowSeconds?: number;
+  /**
+   * What to count against. Defaults to the caller's address, which a rotation
+   * defeats; that is answered with price rather than detection, see the README.
+   */
+  identify?: (request: Request) => string | null;
+  /** Default: an in-process counter, so each instance grants its own allowance. */
+  store?: QuotaStore;
+  /** Only meter these paths or prefixes. Default: everything the gate sees. */
+  paths?: string[];
+}
+
+/** An in-process fixed-window counter. */
+export function memoryQuotaStore(options?: {
+  now?: () => number;
+  sweepEvery?: number;
+}): QuotaStore & { sweep(): void; readonly size: number };
 
 export interface AcceptEntry {
   scheme: 'exact';
