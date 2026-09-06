@@ -56,7 +56,7 @@ export { buildOffer, decodePayment, expectedFor, METHODS, verifyAndSettle } from
  * @param {string} [options.secret]                pass signing secret; defaults to the CoinPay key
  * @param {(ctx: object) => string} [options.page] custom sales page renderer
  * @param {string} [options.contact]               mailto: or URL for bulk deals
- * @param {(sale: object) => void|Promise<void>} [options.onSale]   accounting hook, never awaited for the answer
+ * @param {(sale: object) => void|Promise<void>} [options.onSale]   accounting hook; awaited before the receipt goes out, and its errors are swallowed
  * @param {typeof fetch} [options.fetch]           for tests
  */
 export function createGateway(options = {}) {

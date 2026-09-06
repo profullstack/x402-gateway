@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/x402-gateway",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "description": "Sell crawl access to AI training crawlers by the day over x402, settled by CoinPay. One middleware: 402 with an offer, a sales page with CLI instructions, signed passes, and a robots.txt that keeps search crawlers welcome.",
   "keywords": [

@@ -72,6 +72,7 @@ export interface GatewayOptions {
   secret?: string;
   page?: (ctx: PageContext) => string;
   contact?: string;
+  /** Awaited before the buyer's receipt is sent, and its errors are swallowed: a sale is recorded, and a recording failure never costs the buyer the pass. */
   onSale?: (sale: Sale) => void | Promise<void>;
   fetch?: typeof fetch;
 }
