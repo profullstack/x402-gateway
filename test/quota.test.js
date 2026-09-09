@@ -341,3 +341,31 @@ describe("verifyPass", () => {
     assert.equal(gate.passFrom(new Request(`${SITE}/`)), null);
   });
 });
+
+describe('offer and receipt, for a site with its own refusal', () => {
+  it('hand back what the 402 would have carried, without a request', () => {
+    const gate = gateway(null);
+    const offer = gate.offer();
+    assert.equal(offer.x402Version, 2);
+    assert.ok(offer.accepts.length > 0);
+    assert.equal(offer.accepts[0].payTo, PAY_TO);
+
+    const receipt = gate.receipt();
+    assert.equal(receipt.pass.price, '1.00 USD');
+    assert.equal(receipt.pass.buy, `${SITE}/crawl`);
+    assert.deepEqual(receipt.accepts, offer.accepts);
+  });
+
+  it('quote more than one day', () => {
+    const gate = gateway(null);
+    const one = BigInt(gate.offer(1).accepts[0].amount);
+    const three = BigInt(gate.offer(3).accepts[0].amount);
+    assert.equal(three, one * 3n);
+    assert.equal(gate.receipt(3).pass.days, 3);
+  });
+
+  it('offer nothing when payments are not switched on', () => {
+    const unpaid = createGateway({ siteUrl: SITE });
+    assert.deepEqual(unpaid.offer().accepts, []);
+  });
+});

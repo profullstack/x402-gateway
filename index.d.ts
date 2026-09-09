@@ -180,6 +180,10 @@ export interface Gateway {
   passFrom: (request: Request) => string | null;
   /** Whether that token is a live pass this gateway minted. */
   verifyPass: (token: string | null) => Promise<boolean>;
+  /** The x402 offer this gateway would make, without answering a request. */
+  offer: (days?: number) => Offer;
+  /** The full 402 body around that offer: the offer plus the pass terms. */
+  receipt: (days?: number, extra?: Record<string, unknown>) => Offer & Record<string, unknown>;
 }
 
 export function createGateway(options: GatewayOptions): Gateway;
