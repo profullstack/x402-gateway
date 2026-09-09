@@ -127,11 +127,11 @@ export function createGateway(options = {}) {
       headers: { 'content-type': 'text/html; charset=utf-8', ...noStore, ...headers },
     });
 
-  const pageCtx = (days = 1, usage = null) => ({
-    quota: o.freeQuota
+  const pageCtx = (days = 1, usage = null, quota = o.freeQuota) => ({
+    quota: quota
       ? {
-          requests: o.freeQuota.requests,
-          windowSeconds: o.freeQuota.windowSeconds,
+          requests: quota.requests,
+          windowSeconds: quota.windowSeconds,
           used: usage?.count ?? null,
           resetSeconds: usage?.resetSeconds ?? null,
           exceeded: Boolean(usage?.overLimit),
@@ -177,7 +177,15 @@ export function createGateway(options = {}) {
     // Present when the free allowance is what stopped this request, rather than
     // the crawler lists. It changes what the 402 says, not what it costs.
     const usage = context.usage ?? null;
-    const rateHeaders = usage ? quotaHeaders(o.freeQuota, usage) : {};
+    /*
+     * The allowance the caller was measured against. Defaults to this
+     * gateway's own, but a caller that keeps its own counter -- an app-wide
+     * throttle metering every route, not just the crawler lists -- hands its
+     * own in, so the 402 quotes the limit that actually stopped the request
+     * rather than one the gateway happens to hold.
+     */
+    const quota = context.quota ?? o.freeQuota;
+    const rateHeaders = usage && quota ? quotaHeaders(quota, usage) : {};
 
     if (proofHeader) {
       if (!enabled) return json(receipt(asked, { error: 'Payments are not switched on here.' }), 402);
@@ -272,22 +280,22 @@ export function createGateway(options = {}) {
     }
 
     if (wantsHtml(request.headers.get('accept'))) {
-      return html(o.page(pageCtx(asked, usage)), 402, rateHeaders);
+      return html(o.page(pageCtx(asked, usage, quota)), 402, rateHeaders);
     }
 
-    if (usage) {
+    if (usage && quota) {
       // Say what ran out, when it comes back, and what a pass costs, in that
       // order. A caller reading this is deciding between waiting, rotating
       // addresses, and paying, and the numbers are the argument.
       return json(
         receipt(asked, {
           error:
-            `Free allowance used: ${o.freeQuota.requests} requests per ` +
-            `${o.freeQuota.windowSeconds}s. It resets in ${usage.resetSeconds}s. ` +
+            `Free allowance used: ${quota.requests} requests per ` +
+            `${quota.windowSeconds}s. It resets in ${usage.resetSeconds}s. ` +
             `A pass removes the limit for ${price} a day.`,
           quota: {
-            requests: o.freeQuota.requests,
-            windowSeconds: o.freeQuota.windowSeconds,
+            requests: quota.requests,
+            windowSeconds: quota.windowSeconds,
             used: usage.count,
             resetSeconds: usage.resetSeconds,
           },
@@ -367,6 +375,19 @@ export function createGateway(options = {}) {
     sell,
     enabled,
     options: o,
+    /**
+     * The pass a request presents, and whether it is one this gateway minted
+     * and still honours.
+     *
+     * Exposed because the pass has to be honoured by everything that could
+     * refuse a request, not only by `handle`. An app-wide throttle that meters
+     * every route has to skip whoever already paid, and recomputing the
+     * signing-secret fallback (`secret || coinpay.apiKey`) on its side is
+     * exactly the kind of duplicate rule that drifts and starts charging
+     * paying crawlers twice.
+     */
+    passFrom,
+    verifyPass: async (token) => Boolean(token && (await readPass(token, { secret }))),
     /** robots.txt with this gateway's lists and sales path. */
     robotsTxt: (extra = {}) =>
       robotsTxt({ siteUrl: o.siteUrl, path: o.path, training: o.training, retrieval: o.retrieval, ...extra }),
