@@ -149,9 +149,24 @@ export interface RobotsOptions {
   comments?: string[];
 }
 
+/** What the caller spent against an allowance, as `spend()` reports it. */
+export interface QuotaUsage {
+  count: number;
+  remaining: number;
+  resetSeconds: number;
+  overLimit: boolean;
+}
+
+/** The allowance a 402 should quote, when the caller kept the count itself. */
+export interface SellContext {
+  usage?: QuotaUsage | null;
+  /** Defaults to the gateway's own `freeQuota`. */
+  quota?: { requests: number; windowSeconds: number } | null;
+}
+
 export interface Gateway {
   handle: Handle;
-  sell: (request: Request) => Promise<Response>;
+  sell: (request: Request, context?: SellContext) => Promise<Response>;
   enabled: boolean;
   options: Required<Omit<GatewayOptions, 'onSale' | 'fetch' | 'page' | 'isPaidAgent'>> & {
     onSale: GatewayOptions['onSale'] | null;
@@ -161,6 +176,10 @@ export interface Gateway {
   };
   robotsTxt: (extra?: RobotsOptions) => string;
   page: () => string;
+  /** The pass this request presents, from the gateway's header or a bearer token. */
+  passFrom: (request: Request) => string | null;
+  /** Whether that token is a live pass this gateway minted. */
+  verifyPass: (token: string | null) => Promise<boolean>;
 }
 
 export function createGateway(options: GatewayOptions): Gateway;

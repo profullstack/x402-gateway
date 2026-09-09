@@ -266,3 +266,78 @@ describe('the page a throttled reader sees', () => {
     assert.match(page, /sold by the gigabyte/);
   });
 });
+
+describe("an allowance the caller counted itself", () => {
+  // The app-wide throttle in @profullstack/throttle meters every route, not
+  // just the crawler lists, and then asks the gateway to sell. The 402 has to
+  // quote the limit that actually stopped the request.
+  const usage = { count: 101, remaining: 0, resetSeconds: 42, overLimit: true };
+
+  it("quotes the caller's numbers, not the gateway's", async () => {
+    const gate = gateway(null); // no freeQuota of its own
+    const answer = await gate.sell(reader("203.0.113.9"), {
+      usage,
+      quota: { requests: 100, windowSeconds: 60 },
+    });
+    assert.equal(answer.status, 402);
+    const body = await answer.json();
+    assert.match(body.error, /100 requests per 60s/);
+    assert.match(body.error, /resets in 42s/);
+    assert.equal(body.quota.requests, 100);
+    assert.equal(body.quota.used, 101);
+    assert.equal(answer.headers.get("ratelimit-limit"), "100");
+    assert.equal(answer.headers.get("ratelimit-reset"), "42");
+  });
+
+  it("still falls back to the gateway's own allowance", async () => {
+    const gate = gateway(25);
+    const answer = await gate.sell(reader("203.0.113.9"), { usage });
+    const body = await answer.json();
+    assert.match(body.error, /25 requests per 60s/);
+  });
+
+  // Regression: `sell` used to read o.freeQuota unconditionally whenever a
+  // usage was passed, so a gateway without one threw on the throttle's path.
+  it("does not throw when neither side has an allowance", async () => {
+    const gate = gateway(null);
+    const answer = await gate.sell(reader("203.0.113.9"), { usage });
+    assert.equal(answer.status, 402);
+    const body = await answer.json();
+    assert.match(body.error, /Payment required/);
+  });
+
+  it("renders the caller's allowance on the HTML page too", async () => {
+    const gate = gateway(null);
+    const answer = await gate.sell(
+      reader("203.0.113.9", { accept: "text/html" }),
+      { usage, quota: { requests: 100, windowSeconds: 60 } },
+    );
+    assert.equal(answer.status, 402);
+    assert.match(await answer.text(), /100/);
+  });
+});
+
+describe("verifyPass", () => {
+  it("honours a pass this gateway minted, and nothing else", async () => {
+    const gate = gateway(100);
+    const now = Math.floor(Date.now() / 1000);
+    const good = await mintPass({ secret: SECRET, ref: "r1", expiresAt: now + 60, now });
+    assert.equal(await gate.verifyPass(good.token), true);
+    assert.equal(await gate.verifyPass("cp_nonsense.abc"), false);
+    assert.equal(await gate.verifyPass(null), false);
+
+    const expired = await mintPass({ secret: SECRET, ref: "r2", expiresAt: now - 1, now: now - 61 });
+    assert.equal(await gate.verifyPass(expired.token), false);
+  });
+
+  it("reads the token off a request, header or bearer", () => {
+    const gate = gateway(100);
+    const header = new Request(`${SITE}/`, { headers: { "x-crawl-pass": " tok " } });
+    assert.equal(gate.passFrom(header), "tok");
+    const bearer = new Request(`${SITE}/`, {
+      headers: { authorization: "Bearer cp_abc.def" },
+    });
+    assert.equal(gate.passFrom(bearer), "cp_abc.def");
+    assert.equal(gate.passFrom(new Request(`${SITE}/`)), null);
+  });
+});
