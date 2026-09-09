@@ -388,6 +388,20 @@ export function createGateway(options = {}) {
      */
     passFrom,
     verifyPass: async (token) => Boolean(token && (await readPass(token, { secret }))),
+    /**
+     * The x402 offer this gateway would make, and the full receipt body around
+     * it, without answering a request.
+     *
+     * A site with its own refusal -- a tiered limiter whose 429 body says which
+     * rung the caller is on and what the next one costs -- wants to keep that
+     * body and add a machine-readable offer to it, so an x402 client can pay
+     * on the spot instead of being told in prose to go and fetch /crawl. The
+     * alternative is every such site rebuilding payTo, price, currency and
+     * network from its own copy of the config, which is how two of them end up
+     * quoting different numbers.
+     */
+    offer,
+    receipt,
     /** robots.txt with this gateway's lists and sales path. */
     robotsTxt: (extra = {}) =>
       robotsTxt({ siteUrl: o.siteUrl, path: o.path, training: o.training, retrieval: o.retrieval, ...extra }),
