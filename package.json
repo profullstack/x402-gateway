@@ -1,10 +1,11 @@
 {
   "name": "@profullstack/x402-gateway",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
-  "description": "Sell crawl access to AI training crawlers by the day over x402, settled by CoinPay. One middleware: 402 with an offer, a sales page with CLI instructions, signed passes, and a robots.txt that keeps search crawlers welcome.",
+  "description": "Sell crawl access to AI training crawlers by the day over x402, settled by CoinPay. One middleware: 402 with an offer, a sales page with CLI instructions, signed passes, Profullstack Power Keys honoured as a pass, and a robots.txt that keeps search crawlers welcome.",
   "keywords": [
     "x402",
+    "power-key",
     "402",
     "payment-required",
     "crawler",
@@ -69,5 +70,8 @@
   "sideEffects": false,
   "scripts": {
     "test": "node --test"
+  },
+  "dependencies": {
+    "@profullstack/keys": "^0.1.0"
   }
 }

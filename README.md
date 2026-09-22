@@ -99,8 +99,18 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 | `denyCidrs` | `[]` | IPv4 ranges answered with a tiny `403` before anything else. For a VPS fleet that spoofs a browser: hosting ranges serve no readers. |
 | `chargeSpoofedBrowsers` | `false` | charge a request that claims `Chrome/…` but sends no `Sec-Fetch-Mode`. Every Chromium since 76, headless included, sends it on every request and no script or extension can remove it, so its absence means an HTTP client with a copied string. Firefox and Safari are not judged. |
 | `exempt` | | `(request) => boolean`, never charged: e.g. a request carrying your signed-in cookie |
+| `powerKeys` | Profullstack's | Power Keys honoured as a pass, kid to public key. `false` switches it off. See below. |
+| `revokedKeys` | | Power Key subjects no longer honoured |
 
 Without `coinpay.apiKey` and `payTo` the gateway still answers training crawlers with 402 and the page says payments are off. Nothing is sold, but nothing is given away either.
+
+## One key for every site
+
+A day pass opens one site for a day. A [Power Key](https://profullstack.com/shop) is bought once and opens every Profullstack property for good: no crawler paywall, no allowance, no per-site pass. It is an Ed25519-signed token from [`@profullstack/keys`](https://www.npmjs.com/package/@profullstack/keys), and the gateway verifies it offline with the public key that package ships, so a site honours it with no configuration and no call to anyone.
+
+A client sends it as `Authorization: Bearer pfs_...`, in `x-power-key`, or as `x-api-key`. `passFrom` reads it and `verifyPass` verifies it, so a throttle built on the gateway skips it the same way it skips a day pass. The 402 body carries `powerKey: { shop, header }` and the sales page says where to buy one.
+
+Running the gateway somewhere that is not a Profullstack property? Pass `powerKeys: false`, or your own `{ kid: publicKey }` map to sell keys of your own with `mintKey` from the same package.
 
 ## A free allowance that sells instead of refusing
 

@@ -1,3 +1,4 @@
+import { HEADER as POWER_KEY_HEADER, isPowerKey, keyFrom, PROFULLSTACK_KEYS, SHOP_URL, verifyKey } from '@profullstack/keys';
 import { isTrainingAgent, RETRIEVAL_AGENTS, TRAINING_AGENTS } from './agents.js';
 import { clientIp, compileCidrs, inCidrs, isSpoofedBrowser } from './edge.js';
 import { memoryQuotaStore, meters, normaliseQuota, quotaHeaders, spend } from './quota.js';
@@ -22,6 +23,7 @@ export { mintPass, readPass } from './pass.js';
 export { robotsTxt } from './robots.js';
 export { buildOffer, decodePayment, expectedFor, METHODS, verifyAndSettle } from './x402.js';
 export { memoryQuotaStore, normaliseQuota, quotaHeaders, spend } from './quota.js';
+export { isPowerKey, keyFrom, PROFULLSTACK_KEYS, verifyKey } from '@profullstack/keys';
 
 /**
  * A gateway that sells crawl access to training crawlers, by the day, over x402.
@@ -56,6 +58,8 @@ export { memoryQuotaStore, normaliseQuota, quotaHeaders, spend } from './quota.j
  * @param {boolean} [options.chargeSpoofedBrowsers=false]  charge a "Chrome/…" request that lacks the Sec-Fetch-Mode header every Chromium sends
  * @param {(request: Request) => boolean} [options.exempt]  requests never charged, e.g. ones carrying a signed-in cookie
  * @param {string} [options.secret]                pass signing secret; defaults to the CoinPay key
+ * @param {Record<string,string>|false} [options.powerKeys]  kid -> public key of the Power Keys honoured as a pass; defaults to Profullstack's, `false` switches it off
+ * @param {Iterable<string>} [options.revokedKeys]  Power Key subjects no longer honoured
  * @param {(ctx: object) => string} [options.page] custom sales page renderer
  * @param {string} [options.contact]               mailto: or URL for bulk deals
  * @param {(sale: object) => void|Promise<void>} [options.onSale]   accounting hook; awaited before the receipt goes out, and its errors are swallowed
@@ -109,6 +113,13 @@ export function createGateway(options = {}) {
       buy: days > 1 ? `${buyUrl}?days=${days}` : buyUrl,
       buyDays: `${buyUrl}?days=<n>`,
     },
+    /*
+     * The other way in. A Power Key from the shop opens this site and every
+     * other Profullstack property for good, so the 402 says so: a client that
+     * has one but sent it in the wrong place, or that would rather buy once
+     * than pay by the day, learns here where and how.
+     */
+    ...(o.powerKeys ? { powerKey: { shop: SHOP_URL, header: POWER_KEY_HEADER, bearer: true } } : {}),
     ...extra,
   });
 
@@ -152,14 +163,35 @@ export function createGateway(options = {}) {
     training: o.training,
     retrieval: o.retrieval,
     contact: o.contact,
+    powerKey: o.powerKeys ? { shop: SHOP_URL, header: POWER_KEY_HEADER } : null,
   });
 
-  /** The pass a request presents, from the named header or a bearer token. */
+  /**
+   * The pass a request presents: a day pass from the named header or a bearer
+   * token, or a Power Key wherever @profullstack/keys reads one.
+   */
   const passFrom = (request) => {
     const direct = request.headers.get(o.header);
     if (direct) return direct.trim();
     const m = /^Bearer\s+(cp_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/i.exec(request.headers.get('authorization') ?? '');
-    return m ? m[1] : null;
+    if (m) return m[1];
+    return o.powerKeys ? keyFrom(request) : null;
+  };
+
+  /**
+   * Whether a token opens the site: a live day pass this gateway minted, or a
+   * Power Key signed by a key in `powerKeys` and not revoked. A Power Key is
+   * bought once at the shop and honoured everywhere, which is the point of it:
+   * the site never asks anyone whether it is good, it checks the signature.
+   */
+  const honours = async (token) => {
+    if (!token) return false;
+    if (isPowerKey(token)) {
+      if (!o.powerKeys) return false;
+      const result = await verifyKey(token, { publicKeys: o.powerKeys, revoked: o.revokedKeys });
+      return result.ok;
+    }
+    return Boolean(await readPass(token, { secret }));
   };
 
   /**
@@ -342,8 +374,7 @@ export function createGateway(options = {}) {
      * were the only reason to refuse and is not now that a quota exists.
      */
     const token = passFrom(request);
-    const paid = Boolean(token && (await readPass(token, { secret })));
-    if (paid) return null;
+    if (await honours(token)) return null;
 
     const pays =
       o.isPaidAgent(request.headers.get('user-agent') ?? '') ||
@@ -387,7 +418,7 @@ export function createGateway(options = {}) {
      * paying crawlers twice.
      */
     passFrom,
-    verifyPass: async (token) => Boolean(token && (await readPass(token, { secret }))),
+    verifyPass: honours,
     /**
      * The x402 offer this gateway would make, and the full receipt body around
      * it, without answering a request.
@@ -480,6 +511,8 @@ function normalise(options) {
     onSale: options.onSale ?? null,
     freeQuota: normaliseQuota(options.freeQuota),
     benefits: Array.isArray(options.benefits) ? options.benefits : null,
+    powerKeys: options.powerKeys === false ? null : (options.powerKeys ?? PROFULLSTACK_KEYS),
+    revokedKeys: options.revokedKeys ?? null,
     fetch: options.fetch ?? globalThis.fetch,
   };
 }

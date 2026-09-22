@@ -32,7 +32,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # No install step: this package has no dependencies.
+      - run: npm ci
       - run: node --test
         env:
           CI: true
