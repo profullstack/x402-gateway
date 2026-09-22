@@ -60,6 +60,7 @@ export function renderPage(ctx) {
     maxDays = 30,
     quota = null,
     benefits = null,
+    powerKey = null,
   } = ctx;
 
   /*
@@ -95,6 +96,10 @@ export function renderPage(ctx) {
     benefits && benefits.length
       ? `<h2>What a pass gets you</h2>\n<ul>\n${benefits.map((b) => `  <li>${esc(b)}</li>`).join('\n')}\n</ul>`
       : '';
+  const powerKeyNote = powerKey
+    ? `<h2>Or buy one key for every Profullstack site</h2>
+<p>A <a href="${esc(powerKey.shop)}">Power Key</a> is bought once and opens this site and every other Profullstack property, with no day passes and no limits. Send it as <code>Authorization: Bearer pfs_...</code> or in <code>${esc(powerKey.header)}</code> and this page never answers 402 again.</p>`
+    : '';
   const window =
     minutes === 1440
       ? 'one day'
@@ -134,6 +139,7 @@ ${
 }
 
 ${unlocks}
+${powerKeyNote}
 ${arithmetic}
 
 <h2>How it works</h2>

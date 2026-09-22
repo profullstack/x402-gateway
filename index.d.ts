@@ -34,6 +34,8 @@ export interface PageContext {
   training: string[];
   retrieval: string[];
   contact: string;
+  /** Where a Power Key is bought and the header it goes in, or null when they are switched off. */
+  powerKey?: { shop: string; header: string } | null;
 }
 
 export interface GatewayOptions {
@@ -82,6 +84,15 @@ export interface GatewayOptions {
   freeQuota?: number | FreeQuotaOptions;
   /** What a pass unlocks, listed on the sales page and in the 402 body. */
   benefits?: string[];
+  /**
+   * Power Keys honoured as a pass: kid -> base64url Ed25519 public key, as
+   * @profullstack/keys ships them. Defaults to Profullstack's keys, so a key
+   * bought at profullstack.com/shop opens this site with no configuration.
+   * `false` switches it off.
+   */
+  powerKeys?: Record<string, string> | false;
+  /** Power Key subjects no longer honoured (refunded, leaked). */
+  revokedKeys?: Iterable<string>;
   fetch?: typeof fetch;
 }
 
@@ -176,9 +187,9 @@ export interface Gateway {
   };
   robotsTxt: (extra?: RobotsOptions) => string;
   page: () => string;
-  /** The pass this request presents, from the gateway's header or a bearer token. */
+  /** The pass this request presents: a day pass from the gateway's header or a bearer token, or a Power Key. */
   passFrom: (request: Request) => string | null;
-  /** Whether that token is a live pass this gateway minted. */
+  /** Whether that token opens the site: a live day pass this gateway minted, or a valid, unrevoked Power Key. */
   verifyPass: (token: string | null) => Promise<boolean>;
   /** The x402 offer this gateway would make, without answering a request. */
   offer: (days?: number) => Offer;
