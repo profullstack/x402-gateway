@@ -106,6 +106,13 @@ export function createGateway(options = {}) {
   const money = (cents) => `${(cents / 100).toFixed(2)} ${o.currency}`;
   const price = money(o.priceCents);
   const buyUrl = `${o.siteUrl}${o.path}`;
+  /*
+   * Where the prose points. A bare GET of the sales page answers JSON, because
+   * the body is the only place an x402 client reads the offer from, so a
+   * pointer to it would loop for the reader who needs the explanation most.
+   * `?format=html` is the explainer whatever the Accept header says.
+   */
+  const howUrl = `${buyUrl}?format=html`;
 
   /**
    * How many terms a request is asking to buy: `?days=N`, clamped to
@@ -374,7 +381,7 @@ export function createGateway(options = {}) {
       );
     }
 
-    if (wantsHtml(request.headers.get('accept'))) {
+    if (wantsHtml(request.headers.get('accept')) || new URL(request.url).searchParams.get('format') === 'html') {
       return html(o.page(pageCtx(asked, usage, quota)), 402, rateHeaders);
     }
 
@@ -401,7 +408,7 @@ export function createGateway(options = {}) {
       );
     }
 
-    return json(receipt(asked, { error: `Payment required for training crawlers. Read ${buyUrl} for how.` }), 402);
+    return json(receipt(asked, { error: `Payment required for training crawlers. Read ${howUrl} for how.` }), 402);
   }
 
   /**
@@ -472,7 +479,7 @@ export function createGateway(options = {}) {
         if (!wantsHtml(request.headers.get('accept'))) {
           return json(
             receipt(1, {
-              error: `${path} is read in a browser (it sets a cookie with one line of script) or with a pass. Read ${buyUrl} for how.`,
+              error: `${path} is read in a browser (it sets a cookie with one line of script) or with a pass. Read ${howUrl} for how.`,
             }),
             402,
           );

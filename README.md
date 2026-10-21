@@ -18,7 +18,7 @@ npm install @profullstack/x402-gateway
 | --- | --- |
 | A person, Googlebot, Bingbot, Applebot, OAI-SearchBot, Claude-SearchBot, PerplexityBot… | the site, untouched |
 | GPTBot, ClaudeBot, CCBot, meta-externalagent, Bytespider, Applebot-Extended… | `402` with an x402 offer, or the HTML sales page if it asked for HTML |
-| Anyone at `/crawl` | the sales page (HTML) or the offer (JSON), and the place to pay |
+| Anyone at `/crawl` | the sales page (HTML, or always with `?format=html`) or the offer (JSON), and the place to pay. The 402 prose points at `/crawl?format=html`, so a client that sent no Accept header still reaches the explanation |
 | A request with a valid pass | the site |
 
 The sales page explains the price, how to pay with an x402 client, and how to pay with the CoinPay CLI:

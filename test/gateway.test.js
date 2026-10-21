@@ -486,3 +486,25 @@ describe('adapters', () => {
     assert.match(await robots.text(), /Disallow: \/login/);
   });
 });
+
+describe('the pointer to the explainer', () => {
+  it('points at a URL that answers HTML even to a client sending no Accept header', async () => {
+    const { gateway } = gatewayFor();
+    const refused = await gateway.handle(req('/article', { accept: '*/*' }));
+    assert.equal(refused.status, 402);
+    const { error } = await refused.json();
+    assert.match(error, /https:\/\/example\.test\/crawl\?format=html/);
+
+    const followed = await gateway.handle(new Request('https://example.test/crawl?format=html'));
+    assert.equal(followed.status, 402);
+    assert.match(followed.headers.get('content-type'), /text\/html/);
+    assert.match(await followed.text(), /<html/i);
+  });
+  it('keeps the bare sales page JSON for x402 clients, whose offer is the body', async () => {
+    const { gateway } = gatewayFor();
+    const res = await gateway.handle(new Request('https://example.test/crawl', { headers: { accept: '*/*' } }));
+    assert.equal(res.status, 402);
+    assert.match(res.headers.get('content-type'), /application\/json/);
+    assert.ok((await res.json()).accepts.length > 0);
+  });
+});
