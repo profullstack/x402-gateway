@@ -14,6 +14,31 @@ export interface Sale {
   /** `priceCents * days`. */
   totalCents: number;
   currency: string;
+  /** The site the sale is for (option `property`, default the siteUrl hostname). */
+  property?: string;
+  /** The page bought: the gated URL's path, or `?from=` on the sales page. */
+  resourcePath?: string | null;
+  /** Keyed hash of the buyer's address (never the address). */
+  ipHash?: string | null;
+  /** 'x402' for a proof, 'checkout' for a CoinPay hosted checkout. */
+  source?: 'x402' | 'checkout';
+  network?: string | null;
+  txHash?: string | null;
+  /** Checkout only. */
+  email?: string | null;
+  accountId?: string | null;
+  checkoutSessionId?: string;
+  /** What was sent to CoinPay with the sale. */
+  metadata?: Record<string, unknown>;
+}
+
+export interface CheckoutOptions {
+  /** Key for POST /api/checkout/sessions; defaults to `coinpay.apiKey`. */
+  apiKey?: string;
+  baseUrl?: string;
+  /** The signed-in site user, recorded as `account_id`; the buyer's email otherwise. */
+  account?: (request: Request) => string | null | undefined | Promise<string | null | undefined>;
+  expiresInMinutes?: number;
 }
 
 export interface PageContext {
@@ -36,6 +61,8 @@ export interface PageContext {
   contact: string;
   /** Where a Power Key is bought and the header it goes in, or null when they are switched off. */
   powerKey?: { shop: string; header: string } | null;
+  /** The "Buy a day pass" form, or null when CoinPay's hosted checkout is not available. */
+  checkout?: { action: string; from: string; days: number } | null;
 }
 
 export interface GatewayOptions {
@@ -93,6 +120,14 @@ export interface GatewayOptions {
   contact?: string;
   /** Awaited before the buyer's receipt is sent, and its errors are swallowed: a sale is recorded, and a recording failure never costs the buyer the pass. */
   onSale?: (sale: Sale) => void | Promise<void>;
+  /** The site a sale is recorded for; defaults to the siteUrl hostname. A function reads it per request (e.g. from Host). */
+  property?: string | ((request: Request) => string | null | undefined);
+  /** Key for the recorded address hash; defaults to the pass secret. */
+  ipSalt?: string;
+  /** The human checkout (CoinPay hosted, any coin or PayPal). On by default; `false` hides it. */
+  checkout?: CheckoutOptions | false;
+  /** Cookie a pass is also read from. Default 'crawl_pass'. */
+  passCookie?: string;
   /**
    * A free allowance for ordinary callers, after which the gateway answers 402
    * with the offer instead of letting the request through. A bare number means
@@ -196,7 +231,9 @@ export interface Gateway {
   handle: Handle;
   sell: (request: Request, context?: SellContext) => Promise<Response>;
   enabled: boolean;
-  options: Required<Omit<GatewayOptions, 'onSale' | 'fetch' | 'page' | 'isPaidAgent'>> & {
+  options: Required<Omit<GatewayOptions, 'onSale' | 'fetch' | 'page' | 'isPaidAgent' | 'property' | 'checkout'>> & {
+    property: GatewayOptions['property'] | null;
+    checkout: CheckoutOptions | null;
     onSale: GatewayOptions['onSale'] | null;
     fetch: typeof fetch;
     page: (ctx: PageContext) => string;
@@ -216,6 +253,19 @@ export interface Gateway {
   offer: (days?: number) => Offer;
   /** The full 402 body around that offer: the offer plus the pass terms. */
   receipt: (days?: number, extra?: Record<string, unknown>) => Offer & Record<string, unknown>;
+  /** The PAYMENT-REQUIRED header value (base64 JSON) for `days`, or null when payments are off. */
+  paymentRequired: (days?: number, error?: string) => string | null;
+  /** Who and where a request would be recorded as. */
+  saleContext: (request: Request, source: 'x402' | 'checkout') => Promise<{ property: string; resource_path: string; user_agent: string; ip_hash: string | null; source: string }>;
+  /** Whether the checkout button shows. */
+  checkoutAvailable: () => Promise<boolean>;
+  /** A webhook handler for CoinPay checkout events: re-reads the session from CoinPay and mints its pass. */
+  checkoutWebhook: (request: Request) => Promise<Response>;
+  /** Mint the pass for a paid session, from a webhook body or a session id. Null unless CoinPay says it is paid. */
+  checkoutPaid: (
+    bodyOrId: unknown,
+    request?: Request,
+  ) => Promise<{ token: string; expiresAt: string; days: number; email: string | null; accountId: string | null; ref: string } | null>;
 }
 
 export function createGateway(options: GatewayOptions): Gateway;
@@ -261,6 +311,13 @@ export const METHODS: Array<{ key: string; network: string; asset: string; label
 export const X402_METHODS: typeof METHODS;
 export function buildOffer(args: { payTo: string; priceCents: number; resource: string; description?: string; maxTimeoutSeconds?: number; methods?: typeof METHODS }): Offer;
 export function decodePayment(header: string | null | undefined): Record<string, unknown> | null;
+export function decodeHeader(header: string | null | undefined): Record<string, unknown> | null;
+export function encodeHeader(value: unknown): string;
+export function paymentRequiredHeader(offer: Offer, args?: { url?: string; description?: string; error?: string }): string;
+export function paymentResponseHeader(args: { transaction?: string | null; network?: string | null; payer?: string | null }): string;
+export function renderNotice(ctx: { siteName: string; siteUrl: string; buyUrl: string; title: string; body: string }): string;
+export function renderPassPage(ctx: { siteName: string; siteUrl: string; buyUrl: string; token: string; expiresAt: string; days: number; header: string; cookie: string; email?: string | null }): string;
+export function sessionIdFromWebhook(body: unknown): string | null;
 export function expectedFor(payment: unknown, offer: Offer): { amount: string; resource: string; payTo: string; asset: string } | null;
 /** The value a proof authorizes, in the token's smallest unit, or null. */
 export function paidValueOf(payment: unknown): bigint | null;
@@ -269,8 +326,8 @@ export function daysPaid(value: bigint | null, unit: string | number | bigint, m
 export function verifyAndSettle(
   payment: unknown,
   expected: { amount: string; resource: string; payTo: string; asset: string },
-  coinpay: { apiKey: string; baseUrl: string; fetch?: typeof fetch },
-): Promise<{ ok: true; payer: string | null; ref: string | null } | { ok: false; reason: string; replay: boolean }>;
+  coinpay: { apiKey: string; baseUrl: string; fetch?: typeof fetch; metadata?: Record<string, unknown> | null },
+): Promise<{ ok: true; payer: string | null; ref: string | null; txHash: string | null; network: string | null } | { ok: false; reason: string; replay: boolean }>;
 
 /** ./hono */
 export function x402Gateway(gatewayOrOptions: Gateway | GatewayOptions): (c: { req: { raw: Request } }, next: () => Promise<void>) => Promise<Response | undefined>;

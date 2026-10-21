@@ -2,8 +2,9 @@ import { HEADER as POWER_KEY_HEADER, isPowerKey, keyFrom, PROFULLSTACK_KEYS, SHO
 import { HEADLESS_AGENTS, isTrainingAgent, RETRIEVAL_AGENTS, SCRAPER_AGENTS, TRAINING_AGENTS, VERIFIED_RETRIEVAL, WELCOME_CRAWLERS } from './agents.js';
 import { clientIp, compileCidrs, impostorCrawler, inCidrs, isSpoofedBrowser, isStaleBrowser, welcomeCrawler } from './edge.js';
 import { memoryQuotaStore, meters, normaliseQuota, quotaHeaders, spend } from './quota.js';
-import { challengePage, challengeToken, passedChallenge } from './challenge.js';
-import { renderPage } from './page.js';
+import { challengePage, challengeToken, cookieValue, passedChallenge } from './challenge.js';
+import { checkoutClient, isEmail, isSessionId, sessionIdFromWebhook, sessionState } from './checkout.js';
+import { renderNotice, renderPage, renderPassPage } from './page.js';
 import { mintPass, readPass } from './pass.js';
 import { robotsTxt } from './robots.js';
 import {
@@ -12,6 +13,8 @@ import {
   expectedFor,
   METHODS,
   nonceOf,
+  paymentRequiredHeader,
+  paymentResponseHeader,
   settleAgain,
   validBeforeOf,
   verifyAndSettle,
@@ -39,10 +42,21 @@ export {
   welcomeCrawler,
 } from './edge.js';
 export { challengePage, challengeToken, cookieValue, passedChallenge } from './challenge.js';
-export { renderPage } from './page.js';
+export { renderNotice, renderPage, renderPassPage } from './page.js';
+export { checkoutClient, sessionIdFromWebhook, sessionState } from './checkout.js';
 export { mintPass, readPass } from './pass.js';
 export { robotsTxt } from './robots.js';
-export { buildOffer, decodePayment, expectedFor, METHODS, verifyAndSettle } from './x402.js';
+export {
+  buildOffer,
+  decodeHeader,
+  decodePayment,
+  encodeHeader,
+  expectedFor,
+  METHODS,
+  paymentRequiredHeader,
+  paymentResponseHeader,
+  verifyAndSettle,
+} from './x402.js';
 export { memoryQuotaStore, normaliseQuota, quotaHeaders, spend } from './quota.js';
 export { isPowerKey, keyFrom, PROFULLSTACK_KEYS, verifyKey } from '@profullstack/keys';
 
@@ -91,7 +105,11 @@ export { isPowerKey, keyFrom, PROFULLSTACK_KEYS, verifyKey } from '@profullstack
  * @param {Iterable<string>} [options.revokedKeys]  Power Key subjects no longer honoured
  * @param {(ctx: object) => string} [options.page] custom sales page renderer
  * @param {string} [options.contact]               mailto: or URL for bulk deals
- * @param {(sale: object) => void|Promise<void>} [options.onSale]   accounting hook; awaited before the receipt goes out, and its errors are swallowed
+ * @param {(sale: object) => void|Promise<void>} [options.onSale]   accounting hook; awaited before the receipt goes out, and its errors are swallowed. Carries `property`, `resourcePath`, `payer`, `userAgent`, `ipHash` and `source` ('x402' or 'checkout'); a checkout sale may be reported more than once (return page and webhook), so dedupe on `ref`
+ * @param {string|((request: Request) => string)} [options.property]  the site this sale is for, recorded with CoinPay; defaults to the siteUrl hostname
+ * @param {string} [options.ipSalt]                key for the address hash recorded with a sale; defaults to the pass secret
+ * @param {{apiKey?: string, baseUrl?: string, account?: (request: Request) => string|null|Promise<string|null>, expiresInMinutes?: number}|false} [options.checkout]  the human "Buy a day pass" button (CoinPay hosted checkout, any coin or PayPal); on by default with the CoinPay key, shown only once CoinPay serves checkout sessions
+ * @param {string} [options.passCookie='crawl_pass']  cookie a pass is also read from
  * @param {typeof fetch} [options.fetch]           for tests
  */
 export function createGateway(options = {}) {
@@ -113,6 +131,68 @@ export function createGateway(options = {}) {
    * `?format=html` is the explainer whatever the Accept header says.
    */
   const howUrl = `${buyUrl}?format=html`;
+
+  /** The site a sale is for: config, or what the host app says per request. */
+  const propertyOf = (request) => {
+    if (typeof o.property === 'function') {
+      try {
+        const p = o.property(request);
+        if (p) return String(p);
+      } catch {}
+    } else if (o.property) {
+      return o.property;
+    }
+    return new URL(o.siteUrl).hostname;
+  };
+
+  /**
+   * The page a sale bought. On a gated URL that is the URL itself; on the
+   * sales page it is whatever `?from=` says (the button and the 402 carry it),
+   * since "/crawl" names the shop rather than the page anyone wanted.
+   */
+  const resourcePathOf = (request) => {
+    const url = new URL(request.url);
+    const from = url.searchParams.get('from');
+    if (url.pathname === o.path || url.pathname.startsWith(`${o.path}/`)) {
+      if (from && from.startsWith('/') && !from.startsWith('//') && from.length <= 1024) return from;
+      return url.pathname;
+    }
+    const params = new URLSearchParams(url.search);
+    for (const k of ['days', 'format', 'from']) params.delete(k);
+    const q = params.toString();
+    return `${url.pathname}${q ? `?${q}` : ''}`.slice(0, 1024);
+  };
+
+  /** A keyed hash of the caller's address: enough to tell repeat buyers apart, never the address. */
+  const ipHashOf = async (request) => {
+    const ip = clientIp(request);
+    const key = o.ipSalt || secret;
+    if (!ip || !key) return null;
+    const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(key)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = new Uint8Array(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(`ip:${ip}`)));
+    return Array.from(sig.slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  /** Who paid and where, as CoinPay's ledger and onSale both get it. */
+  const saleContext = async (request, source) => ({
+    property: propertyOf(request),
+    resource_path: resourcePathOf(request),
+    user_agent: (request.headers.get('user-agent') ?? '').slice(0, 512),
+    ip_hash: await ipHashOf(request),
+    source,
+  });
+
+  /*
+   * The human checkout. On whenever there is a key to create sessions with
+   * and a secret to sign the session cookie; shown only once CoinPay answers.
+   */
+  const checkoutPath = `${o.path}/checkout`;
+  const checkoutKey = o.checkout ? o.checkout.apiKey || o.coinpay.apiKey : '';
+  const cpCheckout =
+    o.checkout && checkoutKey && secret
+      ? checkoutClient({ apiKey: checkoutKey, baseUrl: o.checkout.baseUrl || o.coinpay.baseUrl, fetch: o.fetch })
+      : null;
+  const checkoutCookie = 'x402_checkout';
 
   /**
    * How many terms a request is asking to buy: `?days=N`, clamped to
@@ -161,8 +241,24 @@ export function createGateway(options = {}) {
 
   const noStore = {
     'cache-control': 'no-store',
-    vary: 'Accept, User-Agent, X-Payment',
+    vary: 'Accept, User-Agent, X-Payment, Payment-Signature',
+    'access-control-expose-headers': 'PAYMENT-REQUIRED, PAYMENT-RESPONSE',
   };
+
+  /**
+   * The spec's PAYMENT-REQUIRED header for a 402: the same offer as the body,
+   * base64 JSON. Absent when payments are off, since an empty offer is no
+   * offer.
+   */
+  const required = (days = 1, error) =>
+    enabled
+      ? {
+          'payment-required': paymentRequiredHeader(offer(days), {
+            url: days > 1 ? `${buyUrl}?days=${days}` : buyUrl,
+            error,
+          }),
+        }
+      : {};
   const json = (body, status, headers = {}) =>
     new Response(JSON.stringify(body, null, 2), {
       status,
@@ -200,7 +296,17 @@ export function createGateway(options = {}) {
     retrieval: o.retrieval,
     contact: o.contact,
     powerKey: o.powerKeys ? { shop: SHOP_URL, header: POWER_KEY_HEADER } : null,
+    checkout: null,
   });
+
+  /** The page context with the checkout button, when CoinPay serves sessions. */
+  const pageCtxFor = async (request, days, usage, quota) => {
+    const ctx = pageCtx(days, usage, quota);
+    if (cpCheckout && (await cpCheckout.available())) {
+      ctx.checkout = { action: checkoutPath, from: resourcePathOf(request), days };
+    }
+    return ctx;
+  };
 
   /**
    * The pass a request presents: a day pass from the named header or a bearer
@@ -211,7 +317,10 @@ export function createGateway(options = {}) {
     if (direct) return direct.trim();
     const m = /^Bearer\s+(cp_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/i.exec(request.headers.get('authorization') ?? '');
     if (m) return m[1];
-    return o.powerKeys ? keyFrom(request) : null;
+    const pk = o.powerKeys ? keyFrom(request) : null;
+    if (pk) return pk;
+    const cookie = cookieValue(request, o.passCookie);
+    return cookie && cookie.startsWith('cp_') ? cookie : null;
   };
 
   /**
@@ -274,7 +383,8 @@ export function createGateway(options = {}) {
    */
   async function sell(request, context = {}) {
     const ua = request.headers.get('user-agent') ?? '';
-    const proofHeader = request.headers.get('x-payment');
+    // The spec's header first, then the one CoinPay's payer has always sent.
+    const proofHeader = request.headers.get('payment-signature') || request.headers.get('x-payment');
     const asked = daysFrom(request);
     // Present when the free allowance is what stopped this request, rather than
     // the crawler lists. It changes what the 402 says, not what it costs.
@@ -291,10 +401,11 @@ export function createGateway(options = {}) {
 
     if (proofHeader) {
       if (!enabled) return json(receipt(asked, { error: 'Payments are not switched on here.' }), 402);
+      const refuse = (days, error) => json(receipt(days, { error }), 402, required(days, error));
       const payment = decodePayment(proofHeader);
-      if (!payment) return json(receipt(asked, { error: 'X-PAYMENT is not base64 JSON.' }), 402);
+      if (!payment) return refuse(asked, 'The payment proof (PAYMENT-SIGNATURE or X-PAYMENT) is not base64 JSON.');
       const unit = expectedFor(payment, offer(1));
-      if (!unit) return json(receipt(asked, { error: 'Proof does not match an offered network.' }), 402);
+      if (!unit) return refuse(asked, 'Proof does not match an offered network.');
 
       /*
        * The money decides the term, not the URL. A proof is an authorization
@@ -307,11 +418,9 @@ export function createGateway(options = {}) {
        */
       const days = daysPaid(paidValueOf(payment), unit.amount, o.maxDays);
       if (!days) {
-        return json(
-          receipt(asked, {
-            error: `Pay a whole number of days: ${unit.amount} per day in the token's smallest unit, up to ${o.maxDays} days. Add ?days=<n> to ${buyUrl} for the offer.`,
-          }),
-          402,
+        return refuse(
+          asked,
+          `Pay a whole number of days: ${unit.amount} per day in the token's smallest unit, up to ${o.maxDays} days. Add ?days=<n> to ${buyUrl} for the offer.`,
         );
       }
       const expected = expectedFor(payment, offer(days));
@@ -319,7 +428,8 @@ export function createGateway(options = {}) {
 
       const now = Math.floor(Date.now() / 1000);
       const coinpay = { apiKey: o.coinpay.apiKey, baseUrl: o.coinpay.baseUrl, fetch: o.fetch };
-      const result = await verifyAndSettle(payment, expected, coinpay);
+      const sale = await saleContext(request, 'x402');
+      const result = await verifyAndSettle(payment, expected, { ...coinpay, metadata: sale });
 
       let expiresAt = null;
       let replayed = false;
@@ -342,7 +452,7 @@ export function createGateway(options = {}) {
         }
       }
       if (!expiresAt || expiresAt <= now) {
-        return json(receipt(days, { error: result.reason ?? 'Payment could not be settled.' }), 402);
+        return refuse(days, result.reason ?? 'Payment could not be settled.');
       }
 
       const ref = nonceOf(payment) ?? result.ref ?? null;
@@ -360,6 +470,13 @@ export function createGateway(options = {}) {
             days,
             totalCents: o.priceCents * days,
             currency: o.currency,
+            property: sale.property,
+            resourcePath: sale.resource_path,
+            ipHash: sale.ip_hash,
+            source: 'x402',
+            network: result.network ?? payment.network ?? null,
+            txHash: result.txHash ?? null,
+            metadata: { ...sale, ...(result.payer ? { payer: result.payer } : {}) },
           });
         } catch {
           // Accounting must never cost a buyer the pass it paid for.
@@ -377,12 +494,20 @@ export function createGateway(options = {}) {
           use: `curl -H "${o.header}: ${pass.token}" ${o.siteUrl}/`,
         },
         200,
-        { [o.header]: pass.token, [`${o.header}-expires`]: expires },
+        {
+          [o.header]: pass.token,
+          [`${o.header}-expires`]: expires,
+          'payment-response': paymentResponseHeader({
+            transaction: result.txHash ?? ref,
+            network: result.network ?? payment.network,
+            payer: result.payer,
+          }),
+        },
       );
     }
 
     if (wantsHtml(request.headers.get('accept')) || new URL(request.url).searchParams.get('format') === 'html') {
-      return html(o.page(pageCtx(asked, usage, quota)), 402, rateHeaders);
+      return html(o.page(await pageCtxFor(request, asked, usage, quota)), 402, { ...rateHeaders, ...required(asked) });
     }
 
     if (usage && quota) {
@@ -404,11 +529,237 @@ export function createGateway(options = {}) {
           ...(o.benefits ? { unlocks: o.benefits } : {}),
         }),
         402,
-        rateHeaders,
+        { ...rateHeaders, ...required(asked) },
       );
     }
 
-    return json(receipt(asked, { error: `Payment required for training crawlers. Read ${howUrl} for how.` }), 402);
+    return json(receipt(asked, { error: `Payment required for training crawlers. Read ${howUrl} for how.` }), 402, required(asked));
+  }
+
+  /* ------------------------------------------------------------ checkout -- */
+
+  /** Sign and read the cookie that carries a session id to the return page. */
+  const signId = async (id) => {
+    const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(secret)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = new Uint8Array(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(`checkout:${id}`)));
+    return Array.from(sig.slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('');
+  };
+  const sessionFromCookie = async (request) => {
+    const raw = cookieValue(request, checkoutCookie);
+    if (!raw) return null;
+    const dot = raw.lastIndexOf('.');
+    if (dot < 0) return null;
+    const id = decodeURIComponent(raw.slice(0, dot));
+    if (!isSessionId(id)) return null;
+    return (await signId(id)) === raw.slice(dot + 1) ? id : null;
+  };
+
+  const notice = (status, title, body, headers = {}) =>
+    html(o.renderNotice({ siteName: o.siteName, siteUrl: o.siteUrl, buyUrl: howUrl, title, body }), status, headers);
+
+  /** Read a form or JSON body, whichever the buyer sent. */
+  const readForm = async (request) => {
+    const type = (request.headers.get('content-type') ?? '').toLowerCase();
+    try {
+      if (type.includes('application/json')) {
+        const j = await request.json();
+        return j && typeof j === 'object' ? j : {};
+      }
+      const text = await request.text();
+      return Object.fromEntries(new URLSearchParams(text.slice(0, 8192)));
+    } catch {
+      return {};
+    }
+  };
+
+  /** POST /crawl/checkout: create a CoinPay session for a pass and send the buyer to it. */
+  async function startCheckout(request) {
+    if (!cpCheckout || !enabled) return notice(404, 'Checkout is not available here', 'This site does not sell passes through checkout yet.');
+    if (request.method !== 'POST') return notice(405, 'Use the button', `Open <a href="${howUrl}">the pass page</a> and press Buy.`, { allow: 'POST' });
+    const form = await readForm(request);
+    const email = String(form.email ?? '').trim().toLowerCase();
+    if (!isEmail(email)) return notice(400, 'An email address is needed', `CoinPay sends the receipt there. <a href="${howUrl}">Go back</a> and enter one.`);
+    const n = Number.parseInt(String(form.days ?? '1'), 10);
+    const days = Number.isFinite(n) && n >= 1 ? Math.min(n, o.maxDays) : 1;
+    const fromRaw = String(form.from ?? '');
+    const from = fromRaw.startsWith('/') && !fromRaw.startsWith('//') ? fromRaw.slice(0, 1024) : o.path;
+
+    let account = null;
+    if (o.checkout.account) {
+      try {
+        account = (await o.checkout.account(request)) || null;
+      } catch {}
+    }
+    const property = propertyOf(request);
+    const ctx = await saleContext(request, 'checkout');
+    const cents = o.priceCents * days;
+    const minutes = o.checkout.expiresInMinutes ?? 60;
+    const created = await cpCheckout.create({
+      amount: Number((cents / 100).toFixed(2)),
+      currency: 'USD',
+      description: `${days === 1 ? 'Day pass' : `${days}-day pass`} for ${o.siteName}`,
+      customer_email: email,
+      account_id: account ? String(account) : email,
+      property,
+      metadata: {
+        kind: 'crawl_pass',
+        source: 'x402-gateway',
+        property,
+        resource_path: from,
+        days,
+        price_cents: o.priceCents,
+        user_agent: ctx.user_agent,
+        ip_hash: ctx.ip_hash,
+      },
+      success_url: `${o.siteUrl}${checkoutPath}/return?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: howUrl,
+      expires_in_minutes: minutes,
+    });
+    if (!created.ok) {
+      return created.missing
+        ? notice(503, 'Checkout is not open yet', `Card-free checkout is still being switched on. Meanwhile a pass can be bought over x402: see <a href="${howUrl}">the pass page</a>.`)
+        : notice(502, 'Checkout could not start', `CoinPay did not create the payment (${esc(created.reason)}). Try again in a minute, or <a href="${howUrl}">go back</a>.`);
+    }
+    const cookie = `${checkoutCookie}=${encodeURIComponent(created.id)}.${await signId(created.id)}; Path=${checkoutPath}; Max-Age=${(minutes + 60) * 60}; HttpOnly; Secure; SameSite=Lax`;
+    if ((request.headers.get('accept') ?? '').includes('application/json')) {
+      return json({ id: created.id, url: created.url }, 200, { 'set-cookie': cookie });
+    }
+    return new Response(null, { status: 303, headers: { location: created.url, 'set-cookie': cookie, ...noStore } });
+  }
+
+  /**
+   * Mint the pass a paid session bought, from what CoinPay says about it.
+   * Resolves to `{ ok: true, token, expiresAt, days, state }`, or
+   * `{ ok: false, pending|dead, state }`.
+   *
+   * The pass runs from when the session was paid, so reloading the return
+   * page re-mints the same pass rather than a longer one.
+   */
+  async function passForSession(id) {
+    if (!cpCheckout || !isSessionId(id)) return { ok: false, state: null };
+    const session = await cpCheckout.get(id);
+    if (!session) return { ok: false, state: null };
+    const state = sessionState(session);
+    if (state.id && state.id !== id) return { ok: false, state };
+    if (!state.paid) return { ok: false, pending: !state.dead, dead: state.dead, state };
+    // A session for another property of the same business opens nothing here.
+    const property = o.property && typeof o.property === 'string' ? o.property : new URL(o.siteUrl).hostname;
+    if (state.property && typeof o.property !== 'function' && String(state.property).toLowerCase() !== property.toLowerCase()) {
+      return { ok: false, foreign: true, state };
+    }
+    if (state.metadata?.kind && state.metadata.kind !== 'crawl_pass') return { ok: false, foreign: true, state };
+    if (state.currency !== 'USD' || !Number.isFinite(state.cents) || state.cents < o.priceCents) return { ok: false, state };
+    const days = Math.min(o.maxDays, Math.floor(state.cents / o.priceCents));
+    const now = Math.floor(Date.now() / 1000);
+    const from = state.paidAt && state.paidAt <= now ? state.paidAt : now;
+    const expiresAt = from + days * o.passMinutes * 60;
+    if (expiresAt <= now) return { ok: false, expired: true, state };
+    const pass = await mintPass({ secret, ref: `checkout:${id}`, expiresAt: expiresAt, now: Math.min(from, now) });
+    return { ok: true, token: pass.token, expiresAt: pass.expiresAt, days, state };
+  }
+
+  /** Tell onSale about a checkout sale. Swallows the hook's errors, like the x402 path. */
+  const reportCheckout = async (id, minted, request) => {
+    if (!o.onSale) return;
+    const st = minted.state;
+    try {
+      await o.onSale({
+        payer: st.email ?? null,
+        ref: `checkout:${id}`,
+        token: minted.token,
+        expiresAt: new Date(minted.expiresAt * 1000).toISOString(),
+        userAgent: st.metadata?.user_agent ?? request?.headers.get('user-agent') ?? '',
+        priceCents: o.priceCents,
+        days: minted.days,
+        totalCents: st.cents,
+        currency: 'USD',
+        property: st.property ?? propertyOf(request ?? new Request(o.siteUrl)),
+        resourcePath: st.metadata?.resource_path ?? null,
+        ipHash: st.metadata?.ip_hash ?? null,
+        source: 'checkout',
+        email: st.email ?? null,
+        accountId: st.accountId ?? null,
+        checkoutSessionId: id,
+        metadata: st.metadata,
+      });
+    } catch {}
+  };
+
+  /** GET /crawl/checkout/return: the buyer is back from CoinPay; show the pass. */
+  async function checkoutReturn(request) {
+    if (!cpCheckout) return notice(404, 'Checkout is not available here', 'This site does not sell passes through checkout yet.');
+    const fromCookie = await sessionFromCookie(request);
+    const q = new URL(request.url).searchParams;
+    const fromQuery = ['session_id', 'checkout_session_id', 'session'].map((k) => q.get(k)).find((v) => isSessionId(v ?? ''));
+    const id = fromCookie ?? fromQuery ?? null;
+    if (!id) return notice(400, 'No checkout to show', `This page opens after paying at CoinPay. <a href="${howUrl}">Buy a pass</a>.`);
+    const minted = await passForSession(id);
+    if (!minted.ok) {
+      if (minted.pending) {
+        return notice(
+          202,
+          'Waiting for the payment to confirm',
+          'CoinPay has not marked this payment paid yet. Crypto payments need a block or two; this page checks again every 15 seconds.',
+          { refresh: '15' },
+        );
+      }
+      if (minted.dead) return notice(410, 'This checkout closed unpaid', `Nothing was charged. <a href="${howUrl}">Start again</a>.`);
+      if (minted.expired) return notice(410, 'This pass has already run out', `<a href="${howUrl}">Buy another</a>.`);
+      return notice(502, 'Could not read this checkout', 'CoinPay did not answer for this payment. Reload in a minute; a paid pass is not lost.');
+    }
+    // Report the sale once per browser: the cookie is cleared on the way out.
+    if (fromCookie) await reportCheckout(id, minted, request);
+    const expires = new Date(minted.expiresAt * 1000).toISOString();
+    const maxAge = Math.max(0, minted.expiresAt - Math.floor(Date.now() / 1000));
+    const headers = new Headers({ 'content-type': 'text/html; charset=utf-8', ...noStore, [o.header]: minted.token, [`${o.header}-expires`]: expires });
+    headers.append('set-cookie', `${o.passCookie}=${minted.token}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`);
+    headers.append('set-cookie', `${checkoutCookie}=; Path=${checkoutPath}; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
+    const body = o.renderPassPage({
+      siteName: o.siteName,
+      siteUrl: o.siteUrl,
+      buyUrl: howUrl,
+      token: minted.token,
+      expiresAt: expires,
+      days: minted.days,
+      header: o.header,
+      cookie: o.passCookie,
+      email: minted.state.email,
+    });
+    return new Response(body, { status: 200, headers });
+  }
+
+  /**
+   * A CoinPay webhook about a checkout session. The body is only a hint: the
+   * session is read back from CoinPay with this site's key, so a forged call
+   * mints nothing. Resolves to the minted pass (for a site that emails it) or
+   * null. Mount it on a site's existing webhook route, or let the gateway
+   * answer POST /crawl/checkout/webhook itself.
+   */
+  async function checkoutPaid(bodyOrId, request) {
+    const id = typeof bodyOrId === 'string' ? bodyOrId : sessionIdFromWebhook(bodyOrId);
+    if (!id) return null;
+    const minted = await passForSession(id);
+    if (!minted.ok) return null;
+    await reportCheckout(id, minted, request);
+    return { token: minted.token, expiresAt: new Date(minted.expiresAt * 1000).toISOString(), days: minted.days, email: minted.state.email, accountId: minted.state.accountId, ref: `checkout:${id}` };
+  }
+
+  async function checkoutWebhook(request) {
+    if (request.method !== 'POST') return json({ ok: false, error: 'POST only' }, 405, { allow: 'POST' });
+    let body = {};
+    try {
+      body = await request.json();
+    } catch {}
+    const minted = await checkoutPaid(body, request);
+    return json({ ok: true, minted: Boolean(minted) }, 200);
+  }
+
+  /** The routes under the sales page. Null for anything else. */
+  async function checkoutRoute(request, path) {
+    if (path === checkoutPath) return startCheckout(request);
+    if (path === `${checkoutPath}/return`) return checkoutReturn(request);
+    if (path === `${checkoutPath}/webhook`) return checkoutWebhook(request);
+    return null;
   }
 
   /**
@@ -434,6 +785,10 @@ export function createGateway(options = {}) {
 
     const path = new URL(request.url).pathname;
     if (path === o.path) return sell(request);
+    if (path.startsWith(`${checkoutPath}`) && (path === checkoutPath || path.startsWith(`${checkoutPath}/`))) {
+      const answer = await checkoutRoute(request, path);
+      if (answer) return answer;
+    }
     if (o.exempt && o.exempt(request)) return null;
 
     /*
@@ -482,10 +837,11 @@ export function createGateway(options = {}) {
               error: `${path} is read in a browser (it sets a cookie with one line of script) or with a pass. Read ${howUrl} for how.`,
             }),
             402,
+            required(1),
           );
         }
         const token = await challengeToken(secret, ip);
-        return html(challengePage({ token, cookie: o.challenge.cookie, buyUrl }), 402);
+        return html(challengePage({ token, cookie: o.challenge.cookie, buyUrl }), 402, required(1));
       }
     }
 
@@ -558,9 +914,30 @@ export function createGateway(options = {}) {
         ...extra,
       }),
     /** The sales page as HTML, for a site that mounts it on a route of its own. */
-    page: () => o.page(pageCtx()),
+    page: () => {
+      const ctx = pageCtx();
+      if (cpCheckout && cpCheckout.known()) ctx.checkout = { action: checkoutPath, from: o.path, days: 1 };
+      return o.page(ctx);
+    },
+    /** The PAYMENT-REQUIRED header value for `days`, for a site that answers its own 402. */
+    paymentRequired: (days = 1, error) => required(days, error)['payment-required'] ?? null,
+    /** The sale context (property, page, UA, address hash) a request would be recorded with. */
+    saleContext,
+    /** Whether the checkout button shows: CoinPay serves checkout sessions and a key is set. */
+    checkoutAvailable: async () => Boolean(cpCheckout && (await cpCheckout.available())),
+    /** A CoinPay webhook handler (Fetch Request -> Response) that mints a paid session's pass. */
+    checkoutWebhook,
+    /** Mint the pass for a paid checkout session, from a webhook body or a session id. */
+    checkoutPaid,
   };
 }
+
+const esc = (s) =>
+  String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 
 /** Whether the caller would rather read a page than a JSON offer. */
 export const wantsHtml = (accept = '') => String(accept ?? '').toLowerCase().includes('text/html');
@@ -649,6 +1026,12 @@ function normalise(options) {
     page: options.page ?? renderPage,
     contact: options.contact ?? '',
     onSale: options.onSale ?? null,
+    property: typeof options.property === 'function' || typeof options.property === 'string' ? options.property : null,
+    ipSalt: options.ipSalt ?? '',
+    checkout: options.checkout === false ? null : { ...(options.checkout ?? {}) },
+    passCookie: String(options.passCookie ?? 'crawl_pass'),
+    renderNotice: options.renderNotice ?? renderNotice,
+    renderPassPage: options.renderPassPage ?? renderPassPage,
     freeQuota: normaliseQuota(options.freeQuota),
     benefits: Array.isArray(options.benefits) ? options.benefits : null,
     powerKeys: options.powerKeys === false ? null : (options.powerKeys ?? PROFULLSTACK_KEYS),

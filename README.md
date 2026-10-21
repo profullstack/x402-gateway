@@ -102,7 +102,11 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 | `secret` | the CoinPay key | pass signing secret |
 | `page` | built in | `(ctx) => html` |
 | `contact` | | mailto: or URL for bulk deals |
-| `onSale` | | `({ payer, ref, token, expiresAt, userAgent, priceCents, currency }) => …`, for accounting |
+| `onSale` | | `({ payer, ref, token, expiresAt, userAgent, priceCents, days, totalCents, currency, property, resourcePath, ipHash, source, ... }) => …`, for accounting. `source` is `'x402'` or `'checkout'` (which adds `email`, `accountId`, `checkoutSessionId`); a checkout sale can be reported by both the return page and the webhook, so dedupe on `ref` |
+| `property` | the siteUrl hostname | the site a sale is recorded for, sent to CoinPay with every settle. A function `(request) => string` reads it per request, e.g. from `Host` |
+| `ipSalt` | the pass secret | key for the address hash recorded with a sale (the address itself is never sent) |
+| `checkout` | on, with `coinpay.apiKey` | the human "Buy a day pass" button: `{ apiKey?, baseUrl?, account?: (request) => userId, expiresInMinutes? }`. `false` hides it. Shown only while CoinPay answers `/api/checkout/sessions` |
+| `passCookie` | `crawl_pass` | cookie a pass is also read from (the checkout return page sets it) |
 
 | `denyCidrs` | `[]` | IPv4 ranges answered with a tiny `403` before anything else. For a VPS fleet that spoofs a browser: hosting ranges serve no readers. |
 | `chargeSpoofedBrowsers` | `false` | charge a request that claims `Chrome/…` but sends no `Sec-Fetch-Mode`. Every Chromium since 76, headless included, sends it on every request and no script or extension can remove it, so its absence means an HTTP client with a copied string. Firefox and Safari are not judged. |
@@ -181,9 +185,27 @@ The lists catch crawlers that name themselves. Two do not: a VPS fleet wearing a
 
 ## How the money moves
 
-The offer is x402 v2 in CoinPay's dialect: USDC under the `exact` scheme on Base, Polygon or Ethereum, EIP-3009 `transferWithAuthorization`. The buyer signs, the gateway sends the proof to CoinPay's `/api/x402/verify` and `/api/x402/settle`, and CoinPay's relayer broadcasts the transfer, paying the gas. The USDC goes straight to `payTo`.
+The offer is x402 v2 in CoinPay's dialect (and in the spec's `PAYMENT-REQUIRED` header): USDC under the `exact` scheme on Base, Polygon or Ethereum, EIP-3009 `transferWithAuthorization`. The buyer signs, the gateway sends the proof to CoinPay's `/api/x402/verify` and `/api/x402/settle`, and CoinPay's relayer broadcasts the transfer, paying the gas. The USDC goes straight to `payTo`.
 
 A pass is `cp_<payload>.<hmac>`: its own expiry and the payment's nonce, signed with HMAC-SHA256. Verifying one is a hash, not a query. A proof is single-use; retrying with the same proof returns a pass bounded by the proof's own validity window, so a lost response is not a lost dollar and a replayed header is not a free day.
+
+## The x402 v2 headers
+
+Every 402 that carries an offer also carries it in `PAYMENT-REQUIRED`: the spec's `PaymentRequired` object, base64 JSON, with the resource at the top level. A proof is read from `PAYMENT-SIGNATURE` first and `X-PAYMENT` second, in either CoinPay's shape (`scheme` and `network` at the top) or the spec's (`accepted: { scheme, network, ... }`). A sale answers with `PAYMENT-RESPONSE` (`{ success, transaction, network, payer }`) beside the JSON receipt. Nothing old was removed: the body offer, `X-PAYMENT` and the receipt are unchanged.
+
+## Who paid, and where
+
+Every settle call sends CoinPay `metadata: { property, resource_path, payer, user_agent, ip_hash, source }`, which CoinPay keeps on the `x402_payments` row. `resource_path` is the page actually asked for: the gated URL itself, or `?from=` on the sales page (the buy button carries it). `ip_hash` is an HMAC of the address keyed by `ipSalt`, never the address. `onSale` gets the same fields.
+
+## People: Buy a day pass
+
+The sales page shows a **Buy a day pass** form (email, days) whenever CoinPay serves hosted checkout sessions. It posts to `/crawl/checkout`, which creates a session (`POST {coinpay}/api/checkout/sessions` with `amount`, `currency: 'USD'`, `customer_email`, `account_id`, `property`, `metadata`, `success_url`, `cancel_url`) and redirects to CoinPay, where the buyer pays with any coin the business takes or PayPal. The session id rides back in a signed cookie to `/crawl/checkout/return`, which reads the session from CoinPay, and once it is paid mints the same `cp_...` pass the x402 path mints, valid from when it was paid, and shows it with how to send it (header, bearer, or the `crawl_pass` cookie it also sets). Until CoinPay serves the endpoint (a 404 on the probe, rechecked every few minutes) the form is simply not shown.
+
+`account_id` is the buyer's email unless `checkout.account(request)` returns the signed-in user. CoinPay webhooks for checkout sessions can go to `/crawl/checkout/webhook`, or to a site's own route via `gateway.checkoutWebhook(request)` / `gateway.checkoutPaid(body)`: the body is only a hint, the session is re-read from CoinPay before anything is minted.
+
+## Which coins x402 offers
+
+USDC on Base, Polygon and Ethereum, and nothing else on purpose: CoinPay's v2 settle broadcasts EIP-3009 `transferWithAuthorization` only on chains 1, 137 and 8453, and USDC is the only EIP-3009 dollar token there (USDT has none). An offer for anything else would verify and never settle. Every other coin, and PayPal, is the checkout button's job.
 
 ## Who is on which list
 

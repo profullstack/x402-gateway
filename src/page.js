@@ -3,7 +3,8 @@
  *
  * Plain HTML with no script, because the reader is a program that renders
  * nothing, or a person who was sent the link by one. Every number on it comes
- * from the gateway's options; nothing is typed in twice.
+ * from the gateway's options; nothing is typed in twice. The one form on it,
+ * the checkout button, is a plain POST and works with scripts off.
  */
 
 const esc = (s) =>
@@ -24,6 +25,12 @@ pre{background:var(--code);border:1px solid var(--line);border-radius:6px;paddin
 code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em}
 ol,ul{padding-left:1.3rem}li{margin:.3rem 0}
 .price{font-size:2.2rem;font-weight:700;color:var(--acc);margin:.25rem 0}
+.buy{border:1px solid var(--line);border-radius:8px;padding:1rem 1.1rem;margin:1.25rem 0}
+.buy h2{margin-top:0}.buy form{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.6rem 0 .2rem}
+.buy input{font:inherit;padding:.5rem .6rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);min-width:0}
+.buy input[type=email]{flex:1 1 14rem}.buy input[type=number]{width:5rem}
+.buy button{font:inherit;font-weight:600;padding:.55rem 1rem;border:0;border-radius:6px;background:var(--acc);color:#fff;cursor:pointer}
+.token{word-break:break-all}
 table{border-collapse:collapse;margin:.5rem 0;font-size:.95rem}td,th{border-bottom:1px solid var(--line);padding:.35rem .6rem;text-align:left}
 footer{margin-top:3rem;color:var(--mut);font-size:.85rem}
 `;
@@ -61,6 +68,7 @@ export function renderPage(ctx) {
     quota = null,
     benefits = null,
     powerKey = null,
+    checkout = null,
   } = ctx;
 
   /*
@@ -112,6 +120,26 @@ export function renderPage(ctx) {
             : `${minutes} minutes`;
   const networks = (offer?.accepts ?? []).map((a) => a.network).join(', ');
 
+  /*
+   * The button for people. Shown only when CoinPay serves hosted checkout, so
+   * a site never offers a payment it cannot take.
+   */
+  const buyBox = checkout
+    ? `<section class="buy">
+<h2>Buy a day pass</h2>
+<p>Pay ${esc(price)} a day with any coin CoinPay takes or with PayPal. The pass appears on the next page and works with any HTTP client.</p>
+<form method="post" action="${esc(checkout.action)}">
+<input type="hidden" name="from" value="${esc(checkout.from ?? '')}">
+<label class="mut" for="pass-email">Email for the receipt</label>
+<input id="pass-email" type="email" name="email" required autocomplete="email" placeholder="you@example.com">
+<label class="mut" for="pass-days">Days</label>
+<input id="pass-days" type="number" name="days" min="1" max="${esc(String(maxDays))}" value="${esc(String(checkout.days ?? days ?? 1))}">
+<button type="submit">Buy a day pass</button>
+</form>
+<p class="mut">Checkout is hosted by CoinPay. Up to ${esc(String(maxDays))} days at once.</p>
+</section>`
+    : '';
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -137,6 +165,7 @@ ${
     ? ''
     : '<p><strong>Payments are not switched on here yet.</strong> The offer below is empty until the operator configures a payout address, so for now this crawler is simply refused.</p>'
 }
+${enabled ? buyBox : ''}
 
 ${unlocks}
 ${powerKeyNote}
@@ -144,9 +173,9 @@ ${arithmetic}
 
 <h2>How it works</h2>
 <ol>
-  <li>Any page you fetch answers <code>402 Payment Required</code>. This page, fetched with <code>Accept: application/json</code>, returns the x402 offer: USDC, <code>exact</code> scheme, on ${esc(networks || 'Base, Polygon or Ethereum')}.</li>
-  <li>Sign the payment and retry with the proof in an <code>X-PAYMENT</code> header. The response is a JSON receipt carrying a pass.</li>
-  <li>Send the pass in <code>${esc(header)}</code> on every request until it expires — ${esc(window)} per day paid, so a proof for three times the price buys three. When it expires, buy another. The sale is the pass, not the page: fetch the page again with the pass.</li>
+  <li>Any page you fetch answers <code>402 Payment Required</code> with the x402 offer in a <code>PAYMENT-REQUIRED</code> header (base64 JSON). This page, fetched with <code>Accept: application/json</code>, also returns it as the body: USDC, <code>exact</code> scheme, on ${esc(networks || 'Base, Polygon or Ethereum')}.</li>
+  <li>Sign the payment and retry with the proof in a <code>PAYMENT-SIGNATURE</code> (or <code>X-PAYMENT</code>) header. The response is a JSON receipt carrying a pass, with the settlement in <code>PAYMENT-RESPONSE</code>.</li>
+  <li>Send the pass in <code>${esc(header)}</code> (or <code>Authorization: Bearer</code>) on every request until it expires: ${esc(window)} per day paid, so a proof for three times the price buys three. When it expires, buy another. The sale is the pass, not the page: fetch the page again with the pass.</li>
 </ol>
 
 <h2>Pay with the CoinPay CLI</h2>
@@ -186,4 +215,70 @@ curl -sS -H "X-PAYMENT: &lt;base64 proof&gt;" ${esc(buyUrl)}
 </body>
 </html>
 `;
+}
+
+const shell = (siteName, title, inner) => `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${esc(title)} · ${esc(siteName)}</title>
+<style>${CSS}</style>
+</head>
+<body>
+<main>
+${inner}
+<footer>Served by @profullstack/x402-gateway.</footer>
+</main>
+</body>
+</html>
+`;
+
+/**
+ * A short status page for the checkout routes: waiting, closed, refused.
+ * `body` is HTML the gateway wrote; nothing in it comes from the request.
+ *
+ * @param {{siteName: string, siteUrl: string, buyUrl: string, title: string, body: string}} ctx
+ */
+export function renderNotice({ siteName, title, body }) {
+  return shell(siteName, title, `<h1>${esc(title)}</h1>\n<p>${body}</p>`);
+}
+
+/**
+ * The page a buyer lands on after paying at CoinPay: the pass, and the three
+ * ways to send it.
+ *
+ * @param {object} ctx
+ * @param {string} ctx.siteName
+ * @param {string} ctx.siteUrl
+ * @param {string} ctx.buyUrl
+ * @param {string} ctx.token
+ * @param {string} ctx.expiresAt   ISO time
+ * @param {number} ctx.days
+ * @param {string} ctx.header      request header the pass goes in
+ * @param {string} ctx.cookie      cookie the pass is also read from
+ * @param {string|null} [ctx.email]
+ */
+export function renderPassPage({ siteName, siteUrl, token, expiresAt, days, header, cookie, email }) {
+  const term = days === 1 ? 'one day' : `${days} days`;
+  return shell(
+    siteName,
+    'Your pass',
+    `<h1>Paid. Here is your pass.</h1>
+<p class="mut">Good for ${esc(term)} on <a href="${esc(siteUrl)}">${esc(siteName)}</a>, until <strong>${esc(expiresAt)}</strong>.${email ? ` The receipt went to ${esc(email)}.` : ''} Copy it now: this page is the only place it is shown, and the pass is all a crawler needs.</p>
+<pre class="token"><code>${esc(token)}</code></pre>
+
+<h2>How to use it</h2>
+<p>Send it on every request, in whichever of these your client supports:</p>
+<pre><code># a header
+curl -H "${esc(header)}: ${esc(token)}" ${esc(siteUrl)}/
+
+# a bearer token
+curl -H "Authorization: Bearer ${esc(token)}" ${esc(siteUrl)}/
+
+# a cookie (this browser already has it)
+curl --cookie "${esc(cookie)}=${esc(token)}" ${esc(siteUrl)}/</code></pre>
+<p class="mut">When it runs out, buy another at the same page. Every Profullstack site sells its own pass; a Power Key opens them all.</p>`,
+  );
 }

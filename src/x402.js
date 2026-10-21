@@ -1,11 +1,17 @@
 /**
- * x402 v2, in CoinPayPortal's dialect.
+ * x402 v2, in CoinPayPortal's dialect, plus the spec's transport headers.
  *
  * Checked against @profullstack/coinpay/x402-v2 rather than remembered: the 402
  * body is JSON `{ x402Version: 2, accepts: [...] }`, the proof arrives as base64
- * JSON in an `X-PAYMENT` request header, and CoinPay's /api/x402/verify then
- * /api/x402/settle do the cryptography and the on-chain transfer (EIP-3009,
- * with CoinPay's relayer paying the gas, so the buyer needs no ETH).
+ * JSON, and CoinPay's /api/x402/verify then /api/x402/settle do the
+ * cryptography and the on-chain transfer (EIP-3009, with CoinPay's relayer
+ * paying the gas, so the buyer needs no ETH).
+ *
+ * The x402 v2 transport spec moves all three messages into headers:
+ * `PAYMENT-REQUIRED` (the offer, base64 JSON) on the 402, `PAYMENT-SIGNATURE`
+ * (the proof) on the retry, and `PAYMENT-RESPONSE` (the settlement) on the
+ * 200. The gateway speaks both: the body and `X-PAYMENT` stay for the clients
+ * that already pay this way, and the headers are there for spec-strict ones.
  *
  * Reimplemented here in a few dozen lines because the SDK also carries the
  * CLI's interactive-prompt dependency, which a web server has no business
@@ -22,6 +28,13 @@
  *
  * Base first. Merchant order is the payer's preference order, and Base is where
  * the relayer's gas is cheapest.
+ *
+ * Why not more: CoinPay's v2 settle broadcasts `transferWithAuthorization`
+ * only on chains its relayer has an RPC and a funded wallet for, which are
+ * exactly 1, 137 and 8453, and USDC is the only EIP-3009 dollar token on them
+ * (USDT has no EIP-3009). Advertising anything else would quote a payment
+ * that verifies and then never settles. Buyers who want another coin, or
+ * PayPal, use the hosted checkout on the sales page instead.
  */
 export const METHODS = [
   {
@@ -88,8 +101,16 @@ function fromBase64(s) {
   return new TextDecoder().decode(bytes);
 }
 
-/** The proof out of an X-PAYMENT header. Null if it is not base64 JSON. */
-export function decodePayment(header) {
+/** utf8 JSON -> base64, without Buffer, for the PAYMENT-* headers. */
+export function encodeHeader(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+/** A PAYMENT-* header back into an object. Null if it is not base64 JSON. */
+export function decodeHeader(header) {
   if (!header) return null;
   try {
     const parsed = JSON.parse(fromBase64(header));
@@ -97,6 +118,65 @@ export function decodePayment(header) {
   } catch {
     return null;
   }
+}
+
+/**
+ * The proof out of a PAYMENT-SIGNATURE or X-PAYMENT header. Null if it is not
+ * base64 JSON.
+ *
+ * Two shapes arrive. CoinPay's payer puts `scheme` and `network` at the top
+ * level; a spec v2 client nests them in `accepted`, the requirement it chose.
+ * Both carry the same `payload`, so the spec shape is lifted into CoinPay's,
+ * which is what CoinPay's verify and settle read.
+ */
+export function decodePayment(header) {
+  const parsed = decodeHeader(header);
+  if (!parsed) return null;
+  const chosen = parsed.accepted && typeof parsed.accepted === 'object' ? parsed.accepted : null;
+  if (chosen) {
+    if (!parsed.network && chosen.network) parsed.network = chosen.network;
+    if (!parsed.scheme && chosen.scheme) parsed.scheme = chosen.scheme;
+    if (parsed.x402Version === undefined) parsed.x402Version = 2;
+  }
+  return parsed;
+}
+
+/**
+ * The PAYMENT-REQUIRED header for an offer: the spec's PaymentRequired object,
+ * base64 JSON. The resource moves to the top level, as the spec has it, and
+ * each requirement keeps only the spec's own fields, so a strict schema has
+ * nothing to choke on.
+ */
+export function paymentRequiredHeader(offer, { url, description, error } = {}) {
+  const first = offer?.accepts?.[0];
+  return encodeHeader({
+    x402Version: 2,
+    ...(error ? { error: String(error) } : {}),
+    resource: {
+      url: url ?? first?.resource ?? '',
+      description: description ?? first?.description ?? '',
+      mimeType: first?.mimeType ?? 'application/json',
+    },
+    accepts: (offer?.accepts ?? []).map((a) => ({
+      scheme: a.scheme,
+      network: a.network,
+      amount: a.amount,
+      asset: a.asset,
+      payTo: a.payTo,
+      maxTimeoutSeconds: a.maxTimeoutSeconds,
+      extra: a.extra,
+    })),
+  });
+}
+
+/** The PAYMENT-RESPONSE header for a settled payment: the spec's SettlementResponse. */
+export function paymentResponseHeader({ transaction, network, payer }) {
+  return encodeHeader({
+    success: true,
+    transaction: transaction ?? '',
+    network: network ?? '',
+    ...(payer ? { payer } : {}),
+  });
 }
 
 /**
@@ -132,7 +212,7 @@ export const validBeforeOf = (payment) => {
  * gateway answers that with a pass rather than a second charge, bounded by the
  * proof's own validity window so the same header cannot buy hour after hour.
  */
-export async function verifyAndSettle(payment, expected, { apiKey, baseUrl, fetch: f = globalThis.fetch }) {
+export async function verifyAndSettle(payment, expected, { apiKey, baseUrl, fetch: f = globalThis.fetch, metadata = null }) {
   const call = async (path, body) => {
     const res = await f(`${baseUrl}${path}`, {
       method: 'POST',
@@ -153,12 +233,20 @@ export async function verifyAndSettle(payment, expected, { apiKey, baseUrl, fetc
     const reason = String(v.json?.error ?? v.json?.reason ?? `verify failed (${v.status})`);
     return { ok: false, reason, replay: /already used|replay/i.test(reason) };
   }
-  const s = await call('/api/x402/settle', { payment });
+  const payer = v.json.payment?.from ?? null;
+  /*
+   * Who paid and where, for CoinPay's ledger: the property, the page, the
+   * payer, the user agent and a hash of the address. CoinPay keeps it on the
+   * x402_payments row (and ignores it where it does not), so a sale can be
+   * traced to the site and page it bought rather than only to the business.
+   */
+  const settleBody = metadata ? { payment, metadata: { ...metadata, ...(payer ? { payer } : {}) } } : { payment };
+  const s = await call('/api/x402/settle', settleBody);
   if (!s.json?.settled) {
     const reason = String(s.json?.error ?? `settle failed (${s.status})`);
     return { ok: false, reason, replay: /already settled|already being settled/i.test(reason) };
   }
-  return { ok: true, payer: v.json.payment?.from ?? null, ref: s.json.txHash ?? nonceOf(payment) };
+  return { ok: true, payer, ref: s.json.txHash ?? nonceOf(payment), txHash: s.json.txHash ?? null, network: s.json.network ?? payment?.network ?? null };
 }
 
 /** Whether the proof has already been paid, when a settle is asked about twice. */
