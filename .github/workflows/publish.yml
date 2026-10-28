@@ -87,8 +87,10 @@ jobs:
         if: steps.published.outputs.already == 'false'
         env:
           VERSION: ${{ steps.version.outputs.version }}
+        # The read side lags a publish by a minute or two (0.15.0 and 0.15.1
+        # both took ~90s), so 25s of polling reported every release as failed.
         run: |
-          for _ in 1 2 3 4 5; do
+          for _ in $(seq 1 36); do
             if [ "$(npm view "@profullstack/x402-gateway@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
               echo "@profullstack/x402-gateway@$VERSION is on the registry"
               exit 0
