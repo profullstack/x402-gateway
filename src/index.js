@@ -130,11 +130,21 @@ export const APP_PATHS = Object.freeze([
  * @returns {boolean}
  */
 export function isAppPath(path, paths = APP_PATHS) {
+  if (path.startsWith('/api/') && path.split('/').some((segment) => APP_API_SEGMENTS.has(segment.toLowerCase()))) return true;
   return paths.some((p) => {
     const base = p.replace(/\/+$/, '');
     return path === base || path.startsWith(`${base}/`);
   });
 }
+
+/**
+ * An API route with one of these anywhere in it is sign-in or a delivery, not
+ * data: `/api/coinpay/callback`, `/api/callback/oauth`,
+ * `/api/v1/x/oauth/callback`, `/api/sp/oauth/linkedin/callback`. Callbacks are
+ * named for the provider as often as for the flow, so a prefix list alone
+ * missed most of the fleet's.
+ */
+const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout', 'signin', 'signup', 'webhook', 'webhooks', 'health']);
 
 /**
  * A gateway that sells crawl access to training crawlers, by the day, over x402.
