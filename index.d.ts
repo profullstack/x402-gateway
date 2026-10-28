@@ -102,7 +102,7 @@ export interface GatewayOptions {
   denyCidrs?: string[];
   /** Charge a request that claims "Chrome/…" but lacks the Sec-Fetch-Mode header every Chromium sends. Default false. */
   chargeSpoofedBrowsers?: boolean;
-  /** Charge a desktop browser string ~2 years behind its auto-updates (a scraper rotation pool). Default true. */
+  /** Charge a desktop browser string ~2 years behind its auto-updates (a scraper rotation pool), only on requests that do not ask like a browser (see asksLikeABrowser). Default true. */
   chargeStaleBrowsers?: boolean;
   /** Extra agents to charge and refuse in robots.txt, e.g. AI_INDEX_AGENTS. Default none: since 0.10 the AI indexers are welcome retrieval crawlers. */
   aiIndex?: string[];
@@ -121,7 +121,7 @@ export interface GatewayOptions {
   welcome?: WelcomeCrawler[] | false;
   /** Requests never charged, e.g. ones carrying a signed-in cookie. */
   exempt?: (request: Request) => boolean;
-  /** Give a stale desktop browser string the script challenge (16-bit proof of work) on a page request instead of charging it at once; only a caller that will not run it is charged. Default true. */
+  /** @deprecated No effect since 0.15.3: a stale browser string asking for a page reads it outright. */
   challengeStaleBrowsers?: boolean;
   /** Extra sign-in, account and payment paths never charged, appended to APP_PATHS and matched by whole segment. `false` charges APP_PATHS like any page. */
   appPaths?: string[] | false;
@@ -281,6 +281,8 @@ export interface Gateway {
 
 export function createGateway(options: GatewayOptions): Gateway;
 export function wantsHtml(accept?: string | null): boolean;
+/** Whether a request asks the way a browser loading a page does: Accept text/html, a page Sec-Fetch-Dest, or a Next.js RSC navigation. Stale browser strings asking this way are never charged for their age. */
+export function asksLikeABrowser(request: Request): boolean;
 
 export const TRAINING_AGENTS: string[];
 export const SCRAPER_AGENTS: string[];

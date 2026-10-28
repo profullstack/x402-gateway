@@ -179,7 +179,7 @@ const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout'
  * @param {string[]} [options.denyCidrs]           IPv4 ranges answered 403 before anything else, e.g. a VPS fleet's provider
  * @param {boolean} [options.chargeSpoofedBrowsers=false]  charge a "Chrome/…" request that lacks the Sec-Fetch-Mode header every Chromium sends
  * @param {boolean} [options.chargeStaleBrowsers=true]  charge a desktop browser string two years behind its auto-updates (a rotation pool)
- * @param {boolean} [options.challengeStaleBrowsers=true]  give such a browser the script challenge (16-bit proof of work) on a page request first, so a person on an old office Chrome reads; only a caller that will not run it is charged
+ * @param {boolean} [options.challengeStaleBrowsers]  no effect since 0.15.3: a stale browser asking for a page reads it outright
  * @param {string[]} [options.scrapers]            SEO resellers charged and refused in robots.txt; default SCRAPER_AGENTS
  * @param {string[]} [options.headless]            headless browsers charged; default HEADLESS_AGENTS
  * @param {string[]} [options.aiIndex]             extra agents to charge and refuse in robots.txt, e.g. AI_INDEX_AGENTS; default none (they are welcome retrieval crawlers since 0.10)
@@ -451,14 +451,23 @@ export function createGateway(options = {}) {
    * string, or as an impostor wearing a welcome search crawler's name from an
    * address that crawler's operator does not publish.
    */
-  /** isPaid without the stale-browser rule: what a stale browser is charged for besides its age. */
-  const isPaidOtherwise = (request) => {
-    const ua = request.headers.get('user-agent') ?? '';
-    return Boolean(
-      o.isPaidAgent(ua) ||
-        (o.chargeSpoofedBrowsers && isSpoofedBrowser(request)) ||
-        (o.chargeImpostors && impostorCrawler(request, o.welcome)),
-    );
+  /*
+   * A stale browser string is only charged for what a browser never asks for.
+   *
+   * Until 0.15.3 an old desktop Chrome or Firefox string was charged on every
+   * request, and a person on a pinned office build, a VPN browser or a string
+   * our version estimate had drifted past was handed a JSON price instead of
+   * the page (profullstack.com, 2026-10-28: Chrome 130 and Firefox 130 got 402
+   * while bare curl read the page). Age alone cannot tell a person from a
+   * rotation pool, and refusing a person is the worse mistake, so a request that
+   * asks the way a browser does -- a page (Accept: text/html), a subresource a
+   * page loads, or a Next.js client navigation -- reads like anybody else. A
+   * script wearing a copied string and asking for anything-but-HTML or JSON is still charged.
+   */
+  const staleCharged = (request) => {
+    if (!o.chargeStaleBrowsers) return false;
+    if (asksLikeABrowser(request)) return false;
+    return isStaleBrowser(request.headers.get('user-agent') ?? '');
   };
 
   const isPaid = (request) => {
@@ -466,7 +475,7 @@ export function createGateway(options = {}) {
     return Boolean(
       o.isPaidAgent(ua) ||
         (o.chargeSpoofedBrowsers && isSpoofedBrowser(request)) ||
-        (o.chargeStaleBrowsers && isStaleBrowser(ua)) ||
+        staleCharged(request) ||
         (o.chargeImpostors && impostorCrawler(request, o.welcome)),
     );
   };
@@ -924,33 +933,6 @@ export function createGateway(options = {}) {
     const token = passFrom(request);
     if (await honours(token)) return null;
 
-    const ua = request.headers.get('user-agent') ?? '';
-    /*
-     * A stale browser string -- a desktop Chrome two years behind its own
-     * auto-updates -- is mostly a rotation pool, and sometimes a person on a
-     * locked-down office machine. Charging it outright locked the person out
-     * of reading anything; since 0.16 a request for a page gets the script
-     * challenge instead (with proof of work, so a pool still pays per
-     * address in CPU), and only a caller that will not run it is sold a pass.
-     */
-    if (
-      o.challengeStaleBrowsers &&
-      secret &&
-      !isOpen(path) &&
-      (request.method === 'GET' || request.method === 'HEAD') &&
-      o.chargeStaleBrowsers &&
-      isStaleBrowser(ua) &&
-      !isPaidOtherwise(request)
-    ) {
-      const ip = clientIp(request);
-      const cookie = o.challenge?.cookie ?? 'pf_js';
-      const work = o.challenge?.work || 16;
-      if (ip && (await passedChallenge(request, { secret, cookie, ip, work, css: false }))) return null;
-      if (ip && wantsHtml(request.headers.get('accept'))) {
-        const token = await challengeToken(secret, ip);
-        return html(challengePage({ token, cookie, buyUrl, work }), 402, required(1));
-      }
-    }
     if (isPaid(request) && !isOpen(path)) return sell(request);
     if (isOpen(path)) return null;
 
@@ -1090,6 +1072,21 @@ const esc = (s) =>
 
 /** Whether the caller would rather read a page than a JSON offer. */
 export const wantsHtml = (accept = '') => String(accept ?? '').toLowerCase().includes('text/html');
+
+/** Fetch destinations a page load produces: the document itself and what it pulls in. */
+const PAGE_DESTS = new Set(['document', 'iframe', 'frame', 'image', 'style', 'script', 'font', 'video', 'audio', 'track', 'manifest']);
+
+/**
+ * Whether a request asks the way a browser loading a page does: it wants HTML,
+ * it is a navigation or a subresource by its fetch metadata, or it is a Next.js
+ * client navigation (an RSC payload, sent with Accept: *\/*).
+ */
+export function asksLikeABrowser(request) {
+  const h = request.headers;
+  if (wantsHtml(h.get('accept'))) return true;
+  if (PAGE_DESTS.has(String(h.get('sec-fetch-dest') ?? '').toLowerCase())) return true;
+  return h.has('rsc') || h.has('next-router-state-tree') || h.has('x-nextjs-data');
+}
 
 /** The value a proof authorizes, in the token's smallest unit, or null. */
 export function paidValueOf(payment) {

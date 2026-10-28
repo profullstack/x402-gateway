@@ -193,8 +193,16 @@ export function isSpoofedBrowser(request) {
  */
 const DAY = 86_400_000;
 const CADENCE = 28 * DAY;
-const CHROME_ANCHOR = { major: 120, at: Date.UTC(2023, 11, 5) };
-const FIREFOX_ANCHOR = { major: 121, at: Date.UTC(2023, 11, 19) };
+/*
+ * Anchored on recent releases (Chrome 143 shipped 2025-12-02, Firefox 146 on
+ * 2025-12-09). The cadence is four weeks with the odd longer gap, so the
+ * estimate runs AHEAD of the real version by about one major a year. The first
+ * anchor (Chrome 120, December 2023) had drifted three majors ahead by October
+ * 2026, which called Chrome 130-132 "two years old" when it was 20 months old.
+ * Re-anchor when this drifts again; erring ahead is the side that charges people.
+ */
+const CHROME_ANCHOR = { major: 143, at: Date.UTC(2025, 11, 2) };
+const FIREFOX_ANCHOR = { major: 146, at: Date.UTC(2025, 11, 9) };
 
 /** The major a browser that auto-updates would be on at `now`. */
 export function currentMajor(browser, now = Date.now()) {
