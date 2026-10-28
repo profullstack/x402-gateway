@@ -179,6 +179,7 @@ const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout'
  * @param {string[]} [options.denyCidrs]           IPv4 ranges answered 403 before anything else, e.g. a VPS fleet's provider
  * @param {boolean} [options.chargeSpoofedBrowsers=false]  charge a "Chrome/…" request that lacks the Sec-Fetch-Mode header every Chromium sends
  * @param {boolean} [options.chargeStaleBrowsers=true]  charge a desktop browser string two years behind its auto-updates (a rotation pool)
+ * @param {boolean} [options.challengeStaleBrowsers=true]  give such a browser the script challenge (16-bit proof of work) on a page request first, so a person on an old office Chrome reads; only a caller that will not run it is charged
  * @param {string[]} [options.scrapers]            SEO resellers charged and refused in robots.txt; default SCRAPER_AGENTS
  * @param {string[]} [options.headless]            headless browsers charged; default HEADLESS_AGENTS
  * @param {string[]} [options.aiIndex]             extra agents to charge and refuse in robots.txt, e.g. AI_INDEX_AGENTS; default none (they are welcome retrieval crawlers since 0.10)
@@ -450,6 +451,16 @@ export function createGateway(options = {}) {
    * string, or as an impostor wearing a welcome search crawler's name from an
    * address that crawler's operator does not publish.
    */
+  /** isPaid without the stale-browser rule: what a stale browser is charged for besides its age. */
+  const isPaidOtherwise = (request) => {
+    const ua = request.headers.get('user-agent') ?? '';
+    return Boolean(
+      o.isPaidAgent(ua) ||
+        (o.chargeSpoofedBrowsers && isSpoofedBrowser(request)) ||
+        (o.chargeImpostors && impostorCrawler(request, o.welcome)),
+    );
+  };
+
   const isPaid = (request) => {
     const ua = request.headers.get('user-agent') ?? '';
     return Boolean(
@@ -914,6 +925,32 @@ export function createGateway(options = {}) {
     if (await honours(token)) return null;
 
     const ua = request.headers.get('user-agent') ?? '';
+    /*
+     * A stale browser string -- a desktop Chrome two years behind its own
+     * auto-updates -- is mostly a rotation pool, and sometimes a person on a
+     * locked-down office machine. Charging it outright locked the person out
+     * of reading anything; since 0.16 a request for a page gets the script
+     * challenge instead (with proof of work, so a pool still pays per
+     * address in CPU), and only a caller that will not run it is sold a pass.
+     */
+    if (
+      o.challengeStaleBrowsers &&
+      secret &&
+      !isOpen(path) &&
+      (request.method === 'GET' || request.method === 'HEAD') &&
+      o.chargeStaleBrowsers &&
+      isStaleBrowser(ua) &&
+      !isPaidOtherwise(request)
+    ) {
+      const ip = clientIp(request);
+      const cookie = o.challenge?.cookie ?? 'pf_js';
+      const work = o.challenge?.work || 16;
+      if (ip && (await passedChallenge(request, { secret, cookie, ip, work, css: false }))) return null;
+      if (ip && wantsHtml(request.headers.get('accept'))) {
+        const token = await challengeToken(secret, ip);
+        return html(challengePage({ token, cookie, buyUrl, work }), 402, required(1));
+      }
+    }
     if (isPaid(request) && !isOpen(path)) return sell(request);
     if (isOpen(path)) return null;
 
@@ -1118,6 +1155,7 @@ function normalise(options) {
     denyCidrs: options.denyCidrs ?? [],
     chargeSpoofedBrowsers: Boolean(options.chargeSpoofedBrowsers),
     chargeStaleBrowsers: options.chargeStaleBrowsers !== false,
+    challengeStaleBrowsers: options.challengeStaleBrowsers !== false,
     chargeImpostors: options.chargeImpostors !== false,
     exempt: options.exempt ?? null,
     appPaths: options.appPaths === false ? null : [...APP_PATHS, ...(options.appPaths ?? [])],
