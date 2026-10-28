@@ -189,7 +189,7 @@ const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout'
  * @param {{token: string, cidrs: string[]}[]|false} [options.welcome]  search crawlers never metered when name and address agree; default WELCOME_CRAWLERS
  * @param {(request: Request) => boolean} [options.exempt]  requests never charged, e.g. ones carrying a signed-in cookie
  * @param {(request: Request) => boolean|null|Promise<boolean|null>} [options.authenticate]  verify the site's own credential (API key, session bearer): true is never charged, false is answered 401, null (no credential) carries on; must VERIFY, not test for a header
- * @param {number|{requests: number, windowSeconds?: number, identify?: (request: Request) => string|null, store?: object}|false} [options.suspectAllowance]  requests charged only for a spoofed, stale or headless browser string read this many pages per address first (default 20 an hour); false charges them on the first request
+ * @param {number|{requests: number, windowSeconds?: number, paths?: string[], identify?: (request: Request) => string|null, store?: object}|false} [options.suspectAllowance]  requests charged only for a spoofed, stale or headless browser string read this many pages per address first (default 20 an hour); with `paths`, only on those paths or prefixes (a trailing / is a prefix, but '/' alone is the homepage); false charges them on the first request
  * @param {string[]|false} [options.appPaths]       extra sign-in, account and payment paths never charged, added to APP_PATHS; `false` charges them like any page
  * @param {string} [options.secret]                pass signing secret; defaults to the CoinPay key
  * @param {Record<string,string>|false} [options.powerKeys]  kid -> public key of the Power Keys honoured as a pass; defaults to Profullstack's, `false` switches it off
@@ -988,7 +988,9 @@ export function createGateway(options = {}) {
     if (declaredPaid(request)) return sell(request);
     if (suspectBrowser(request)) {
       const quota = o.suspectAllowance;
-      if (!quota) return sell(request);
+      // With `paths`, only those pages get the allowance (a homepage, say);
+      // everywhere else a suspect string pays on sight, as before 0.16.
+      if (!quota || !allowanceCovers(quota, path)) return sell(request);
       const usage = await spend(quota, quota.identify ? quota.identify(request) : `suspect:${clientIp(request)}`);
       if (usage?.overLimit) return sell(request, { usage, quota });
     }
@@ -1250,6 +1252,12 @@ function normalise(options) {
     revokedKeys: options.revokedKeys ?? null,
     fetch: options.fetch ?? globalThis.fetch,
   };
+}
+
+/** Whether a suspect allowance covers this path. Like `meters`, except '/' alone is the homepage, not every path. */
+function allowanceCovers(quota, path) {
+  if (!quota.paths) return true;
+  return quota.paths.some((p) => (p === '/' ? path === '/' : p.endsWith('/') ? path.startsWith(p) : path === p));
 }
 
 /** `true` means the default 16 bits; a number is clamped to 0-24 (24 is ~16M digests, too slow for a phone). */
