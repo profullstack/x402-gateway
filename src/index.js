@@ -74,6 +74,69 @@ export { memoryQuotaStore, normaliseQuota, quotaHeaders, spend } from './quota.j
 export { isPowerKey, keyFrom, PROFULLSTACK_KEYS, verifyKey } from '@profullstack/keys';
 
 /**
+ * Where people and their agents sign in, pay and run an account. Never charged.
+ *
+ * The gateway sells reading, and none of these is reading: a 402 on /login is
+ * not an offer anybody can take, it is a locked door. Since 0.8 a stale or
+ * headless browser string is charged on every path, and every path included
+ * these, so an agent whose OAuth token lapsed could not sign back in, a person
+ * on a two-year-old Chrome could not reach checkout, and a processor's webhook
+ * wearing an old user agent was answered with a price. Each is matched as a
+ * whole path segment: `/pay` covers `/pay/abc` and not `/payouts-explained`.
+ * Sites add their own with `appPaths` (they are appended) and an app whose
+ * whole `/api/` is credentialed adds `/api`.
+ */
+export const APP_PATHS = Object.freeze([
+  '/login',
+  '/logout',
+  '/signin',
+  '/sign-in',
+  '/signout',
+  '/sign-out',
+  '/signup',
+  '/sign-up',
+  '/register',
+  '/auth',
+  '/oauth',
+  '/sso',
+  '/callback',
+  '/forgot-password',
+  '/reset-password',
+  '/verify',
+  '/verify-email',
+  '/dashboard',
+  '/account',
+  '/settings',
+  '/admin',
+  '/onboarding',
+  '/checkout',
+  '/pay',
+  '/billing',
+  '/webhook',
+  '/webhooks',
+  '/api/auth',
+  '/api/oauth',
+  '/api/health',
+  '/api/webhook',
+  '/api/webhooks',
+  '/api/checkout',
+]);
+
+/**
+ * Whether `path` is one of `paths` or below it, matched by whole segments.
+ *
+ * @param {string} path
+ * @param {readonly string[]} [paths=APP_PATHS]
+ * @returns {boolean}
+ */
+export function isAppPath(path, paths = APP_PATHS) {
+  return paths.some((p) => {
+    const base = p.replace(/\/+$/, '');
+    return path === base || path.startsWith(`${base}/`);
+  });
+}
+
+/**
  * A gateway that sells crawl access to training crawlers, by the day, over x402.
  *
  * People and search crawlers pass through untouched. A crawler on the training
@@ -114,6 +177,7 @@ export { isPowerKey, keyFrom, PROFULLSTACK_KEYS, verifyKey } from '@profullstack
  * @param {{paths: string[], cookie?: string, work?: number|boolean, css?: boolean, cssPath?: string, when?: (request: Request, url: URL) => boolean}|false} [options.challenge]  requests to these paths (and, with `when`, only those it accepts, e.g. faceted URLs) must run a one-line script (cookie + reload) first; with `work` (bits, `true` = 16) the script must also solve a SHA-256 proof of work, so a swarm that rotates its address every page pays it on every page; with `css` the page links a per-address stylesheet (at `cssPath`, default `/__pf/c/`) whose fetch sets a second cookie, so a scraper that blocks stylesheets never passes; off by default
  * @param {{token: string, cidrs: string[]}[]|false} [options.welcome]  search crawlers never metered when name and address agree; default WELCOME_CRAWLERS
  * @param {(request: Request) => boolean} [options.exempt]  requests never charged, e.g. ones carrying a signed-in cookie
+ * @param {string[]|false} [options.appPaths]       extra sign-in, account and payment paths never charged, added to APP_PATHS; `false` charges them like any page
  * @param {string} [options.secret]                pass signing secret; defaults to the CoinPay key
  * @param {Record<string,string>|false} [options.powerKeys]  kid -> public key of the Power Keys honoured as a pass; defaults to Profullstack's, `false` switches it off
  * @param {Iterable<string>} [options.revokedKeys]  Power Key subjects no longer honoured
@@ -826,6 +890,8 @@ export function createGateway(options = {}) {
       return stylesheetResponse(request, { secret, cookie: o.challenge.cookie, ip: clientIp(request), cssPath: o.challenge.cssPath });
     }
     if (o.exempt && o.exempt(request)) return null;
+    // Signing in, paying and running an account are never sold. See APP_PATHS.
+    if (o.appPaths && isAppPath(path, o.appPaths)) return null;
 
     /*
      * A valid pass is checked before anything else that could refuse, because
@@ -1044,6 +1110,7 @@ function normalise(options) {
     chargeStaleBrowsers: options.chargeStaleBrowsers !== false,
     chargeImpostors: options.chargeImpostors !== false,
     exempt: options.exempt ?? null,
+    appPaths: options.appPaths === false ? null : [...APP_PATHS, ...(options.appPaths ?? [])],
     training,
     scrapers,
     headless,
