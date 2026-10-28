@@ -121,6 +121,8 @@ export interface GatewayOptions {
   welcome?: WelcomeCrawler[] | false;
   /** Requests never charged, e.g. ones carrying a signed-in cookie. */
   exempt?: (request: Request) => boolean;
+  /** Give a stale desktop browser string the script challenge (16-bit proof of work) on a page request instead of charging it at once; only a caller that will not run it is charged. Default true. */
+  challengeStaleBrowsers?: boolean;
   /** Extra sign-in, account and payment paths never charged, appended to APP_PATHS and matched by whole segment. `false` charges APP_PATHS like any page. */
   appPaths?: string[] | false;
   /** Pass signing secret. Defaults to the CoinPay key. */
