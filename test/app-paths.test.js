@@ -60,6 +60,16 @@ describe('sign-in, account and payment paths', () => {
     assert.equal((await gateway.handle(req('/payouts-explained', STALE))).status, 402);
   });
 
+  it('let any API route through that signs in or takes a delivery, wherever the segment sits', async () => {
+    for (const path of ['/api/coinpay/callback', '/api/callback/oauth', '/api/v1/nixamp/oauth/callback', '/api/sp/oauth/linkedin/callback', '/api/stripe/webhook', '/api/v2/health']) {
+      assert.equal(isAppPath(path), true, path);
+      assert.equal(await gateway.handle(req(path, STALE)), null, path);
+    }
+    assert.equal(isAppPath('/api/posts'), false);
+    assert.equal(isAppPath('/blog/oauth'), false);
+    assert.equal((await gateway.handle(req('/api/authors', STALE))).status, 402);
+  });
+
   it('take a site\'s own paths on top of the defaults', async () => {
     const g = gatewayWith({ appPaths: ['/api', '/i/'] });
     assert.equal(await g.handle(req('/api/payments/create', STALE, 'POST')), null);

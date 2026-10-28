@@ -112,7 +112,7 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 | `denyCidrs` | `[]` | IPv4 ranges answered with a tiny `403` before anything else. For a VPS fleet that spoofs a browser: hosting ranges serve no readers. |
 | `chargeSpoofedBrowsers` | `false` | charge a request that claims `Chrome/…` but sends no `Sec-Fetch-Mode`. Every Chromium since 76, headless included, sends it on every request and no script or extension can remove it, so its absence means an HTTP client with a copied string. Firefox and Safari are not judged. |
 | `exempt` | | `(request) => boolean`, never charged: e.g. a request carrying your signed-in cookie |
-| `appPaths` | `APP_PATHS` | extra paths never charged, added to the default sign-in, account, checkout, pay and webhook paths (`/login`, `/signup`, `/oauth`, `/dashboard`, `/checkout`, `/pay`, `/webhooks`, `/api/auth`, `/api/health`, ...; see `APP_PATHS`). Matched by whole segment. An app whose whole `/api/` is credentialed adds `'/api'`. `false` charges them like any page |
+| `appPaths` | `APP_PATHS` | extra paths never charged, added to the default sign-in, account, checkout, pay and webhook paths (plus any `/api/` route with an `auth`, `oauth`, `callback`, `login`, `signup`, `webhook(s)` or `health` segment) (`/login`, `/signup`, `/oauth`, `/dashboard`, `/checkout`, `/pay`, `/webhooks`, `/api/auth`, `/api/health`, ...; see `APP_PATHS`). Matched by whole segment. An app whose whole `/api/` is credentialed adds `'/api'`. `false` charges them like any page |
 | `powerKeys` | Profullstack's | Power Keys honoured as a pass, kid to public key. `false` switches it off. See below. |
 | `revokedKeys` | | Power Key subjects no longer honoured |
 
