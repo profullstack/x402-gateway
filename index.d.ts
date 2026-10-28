@@ -121,6 +121,8 @@ export interface GatewayOptions {
   welcome?: WelcomeCrawler[] | false;
   /** Requests never charged, e.g. ones carrying a signed-in cookie. */
   exempt?: (request: Request) => boolean;
+  /** Extra sign-in, account and payment paths never charged, appended to APP_PATHS and matched by whole segment. `false` charges APP_PATHS like any page. */
+  appPaths?: string[] | false;
   /** Pass signing secret. Defaults to the CoinPay key. */
   secret?: string;
   page?: (ctx: PageContext) => string;
@@ -281,6 +283,10 @@ export function wantsHtml(accept?: string | null): boolean;
 export const TRAINING_AGENTS: string[];
 export const SCRAPER_AGENTS: string[];
 export const HEADLESS_AGENTS: string[];
+/** Sign-in, account, payment and webhook paths the gateway never charges. */
+export const APP_PATHS: readonly string[];
+/** Whether `path` is one of `paths` (default APP_PATHS) or below it, by whole segment. */
+export function isAppPath(path: string, paths?: readonly string[]): boolean;
 export const AI_INDEX_AGENTS: string[];
 export function challengeToken(secret: string, ip: string, day?: number): Promise<string>;
 export function passedChallenge(request: Request, options: { secret: string; cookie: string; ip: string; work?: number; css?: boolean; now?: number }): Promise<boolean>;
