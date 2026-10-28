@@ -11,13 +11,14 @@ const gatewayWith = (extra = {}) =>
     ...extra,
   });
 
-// The three kinds of caller the reported lockout came from.
+// The three kinds of caller the reported lockout came from. Accept */*: a stale
+// browser string asking for a page reads it (0.15.3), so these are scripts.
 const STALE = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const HEADLESS = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/141.0.0.0 Safari/537.36';
 const GPTBOT = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)';
 
 const req = (path, ua, method = 'GET') =>
-  new Request(`https://example.test${path}`, { method, headers: { 'user-agent': ua, accept: 'text/html,*/*' } });
+  new Request(`https://example.test${path}`, { method, headers: { 'user-agent': ua, accept: '*/*' } });
 
 describe('sign-in, account and payment paths', () => {
   const gateway = gatewayWith();
