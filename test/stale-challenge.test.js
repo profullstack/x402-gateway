@@ -14,6 +14,8 @@ const gw = (extra = {}) =>
     coinpay: { apiKey: KEY, baseUrl: 'https://coinpay.test' },
     payTo: '0xCC3b072391AE7A8d10cF00DdC5F61DB2cA5541E5',
     fetch: async () => new Response('{}'),
+    // These suites test the rules; the allowance in front of them has its own (suspect-allowance.test.js).
+    suspectAllowance: false,
     ...extra,
   });
 

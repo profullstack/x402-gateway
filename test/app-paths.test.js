@@ -8,6 +8,8 @@ const gatewayWith = (extra = {}) =>
     coinpay: { apiKey: 'cp_live_test', baseUrl: 'https://coinpay.test' },
     payTo: '0x1111111111111111111111111111111111111111',
     fetch: async () => new Response('{}'),
+    // These suites test the rules; the allowance in front of them has its own (suspect-allowance.test.js).
+    suspectAllowance: false,
     ...extra,
   });
 

@@ -188,6 +188,8 @@ const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout'
  * @param {{paths: string[], cookie?: string, work?: number|boolean, css?: boolean, cssPath?: string, when?: (request: Request, url: URL) => boolean}|false} [options.challenge]  requests to these paths (and, with `when`, only those it accepts, e.g. faceted URLs) must run a one-line script (cookie + reload) first; with `work` (bits, `true` = 16) the script must also solve a SHA-256 proof of work, so a swarm that rotates its address every page pays it on every page; with `css` the page links a per-address stylesheet (at `cssPath`, default `/__pf/c/`) whose fetch sets a second cookie, so a scraper that blocks stylesheets never passes; off by default
  * @param {{token: string, cidrs: string[]}[]|false} [options.welcome]  search crawlers never metered when name and address agree; default WELCOME_CRAWLERS
  * @param {(request: Request) => boolean} [options.exempt]  requests never charged, e.g. ones carrying a signed-in cookie
+ * @param {(request: Request) => boolean|null|Promise<boolean|null>} [options.authenticate]  verify the site's own credential (API key, session bearer): true is never charged, false is answered 401, null (no credential) carries on; must VERIFY, not test for a header
+ * @param {number|{requests: number, windowSeconds?: number, identify?: (request: Request) => string|null, store?: object}|false} [options.suspectAllowance]  requests charged only for a spoofed, stale or headless browser string read this many pages per address first (default 20 an hour); false charges them on the first request
  * @param {string[]|false} [options.appPaths]       extra sign-in, account and payment paths never charged, added to APP_PATHS; `false` charges them like any page
  * @param {string} [options.secret]                pass signing secret; defaults to the CoinPay key
  * @param {Record<string,string>|false} [options.powerKeys]  kid -> public key of the Power Keys honoured as a pass; defaults to Profullstack's, `false` switches it off
@@ -470,14 +472,49 @@ export function createGateway(options = {}) {
     return isStaleBrowser(request.headers.get('user-agent') ?? '');
   };
 
-  const isPaid = (request) => {
+  /** Charged on sight: a declared crawler, or an impostor wearing a welcome crawler's name. */
+  const declaredPaid = (request) => {
+    const ua = request.headers.get('user-agent') ?? '';
+    return Boolean(o.isPaidAgent(ua) || (o.chargeImpostors && impostorCrawler(request, o.welcome)));
+  };
+
+  /*
+   * Charged only past an allowance: a browser string that does not add up
+   * (no Sec-Fetch headers, two years old) or a headless browser that says so.
+   *
+   * Until 0.16 these were charged on the first request, which is how a person
+   * or an agent reading one page got a JSON price instead of it (profullstack.com
+   * /plans, 2026-10-28, an agent with a stale Chrome string; ugig.net
+   * /api/gigs/<id>, the same day, a seller's own listing read with Chrome/141
+   * and no Sec-Fetch). None of these signals says how MUCH a caller reads, and
+   * volume is what the pass is for, so they now buy a small per-address
+   * allowance first (`suspectAllowance`, default 20 an hour) and pay after it.
+   */
+  const suspectBrowser = (request) => {
     const ua = request.headers.get('user-agent') ?? '';
     return Boolean(
-      o.isPaidAgent(ua) ||
-        (o.chargeSpoofedBrowsers && isSpoofedBrowser(request)) ||
+      (o.chargeSpoofedBrowsers && isSpoofedBrowser(request)) ||
         staleCharged(request) ||
-        (o.chargeImpostors && impostorCrawler(request, o.welcome)),
+        (o.headless.length && isTrainingAgent(ua, o.headless)),
     );
+  };
+
+  /** Whether the lists would charge this request, allowance aside. */
+  const isPaid = (request) => declaredPaid(request) || suspectBrowser(request);
+
+  /**
+   * What the site's `authenticate` hook says about the credential a request
+   * carries: true (verified), false (presented and refused) or null (none, or
+   * the hook failed). A hook that throws is no opinion, never a refusal.
+   */
+  const authenticated = async (request) => {
+    if (!o.authenticate) return null;
+    try {
+      const verdict = await o.authenticate(request);
+      return verdict === true || verdict === false ? verdict : null;
+    } catch {
+      return null;
+    }
   };
 
   /**
@@ -933,8 +970,28 @@ export function createGateway(options = {}) {
     const token = passFrom(request);
     if (await honours(token)) return null;
 
-    if (isPaid(request) && !isOpen(path)) return sell(request);
+    /*
+     * A site's own credential beats every list. An agent seller reading its
+     * own listing with its API key is a customer whatever string it wears;
+     * a credential the site refuses is answered 401, because "pay for a crawl
+     * pass" is the wrong answer to "your key is wrong". The hook verifies:
+     * exempting a request because a header is present would let every
+     * scraper bolt on a fake one.
+     */
+    const verdict = await authenticated(request);
+    if (verdict === true) return null;
+    if (verdict === false) {
+      return json({ error: 'Invalid credentials.', status: 401 }, 401, { 'www-authenticate': 'Bearer' });
+    }
+
     if (isOpen(path)) return null;
+    if (declaredPaid(request)) return sell(request);
+    if (suspectBrowser(request)) {
+      const quota = o.suspectAllowance;
+      if (!quota) return sell(request);
+      const usage = await spend(quota, quota.identify ? quota.identify(request) : `suspect:${clientIp(request)}`);
+      if (usage?.overLimit) return sell(request, { usage, quota });
+    }
 
     /*
      * A search crawler that is who it says it is reads free and unmetered.
@@ -1132,7 +1189,8 @@ function normalise(options) {
   const scrapers = options.scrapers ?? SCRAPER_AGENTS;
   const headless = options.headless ?? HEADLESS_AGENTS;
   const aiIndex = options.aiIndex ?? [];
-  const paid = [...training, ...scrapers, ...headless, ...aiIndex];
+  // Headless strings are judged by `suspectBrowser`, after an allowance, not here.
+  const paid = [...training, ...scrapers, ...aiIndex];
   return {
     siteUrl,
     siteName: options.siteName || new URL(siteUrl).hostname,
@@ -1155,6 +1213,8 @@ function normalise(options) {
     challengeStaleBrowsers: options.challengeStaleBrowsers !== false,
     chargeImpostors: options.chargeImpostors !== false,
     exempt: options.exempt ?? null,
+    authenticate: typeof options.authenticate === 'function' ? options.authenticate : null,
+    suspectAllowance: options.suspectAllowance === false ? null : normaliseQuota(options.suspectAllowance ?? { requests: 20, windowSeconds: 3600 }),
     appPaths: options.appPaths === false ? null : [...APP_PATHS, ...(options.appPaths ?? [])],
     training,
     scrapers,
