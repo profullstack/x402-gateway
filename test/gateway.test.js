@@ -58,6 +58,8 @@ const gatewayFor = (extra = {}, script) => {
     coinpay: { apiKey: KEY, baseUrl: 'https://coinpay.test' },
     payTo: PAY_TO,
     fetch: cp.fetch,
+    // These suites test the rules; the allowance in front of them has its own (suspect-allowance.test.js).
+    suspectAllowance: false,
     ...extra,
   });
   return { gateway, cp };

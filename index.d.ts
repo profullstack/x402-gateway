@@ -121,6 +121,10 @@ export interface GatewayOptions {
   welcome?: WelcomeCrawler[] | false;
   /** Requests never charged, e.g. ones carrying a signed-in cookie. */
   exempt?: (request: Request) => boolean;
+  /** Verify the site's own credential: true never charged, false answered 401, null carries on. Since 0.16. */
+  authenticate?: (request: Request) => boolean | null | undefined | Promise<boolean | null | undefined>;
+  /** Pages per address a spoofed, stale or headless browser string reads before the 402 (default 20 an hour); false charges at once. Since 0.16. */
+  suspectAllowance?: number | { requests: number; windowSeconds?: number; identify?: (request: Request) => string | null; store?: { hit: (key: string, windowSeconds: number) => unknown } } | false;
   /** @deprecated No effect since 0.15.3: a stale browser string asking for a page reads it outright. */
   challengeStaleBrowsers?: boolean;
   /** Extra sign-in, account and payment paths never charged, appended to APP_PATHS and matched by whole segment. `false` charges APP_PATHS like any page. */
