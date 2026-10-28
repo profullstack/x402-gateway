@@ -57,6 +57,13 @@ describe('a suspect browser string reads a few pages first (0.16.0)', () => {
     assert.equal((await gw({ suspectAllowance: false }).handle(req('/', HEADLESS))).status, 402);
   });
 
+  it('with paths, gives the allowance only there (0.16.1)', async () => {
+    const gateway = gw({ suspectAllowance: { requests: 5, windowSeconds: 3600, paths: ['/', '/about'] } });
+    assert.equal(await gateway.handle(req('/', SPOOFED)), null);
+    assert.equal(await gateway.handle(req('/about', SPOOFED)), null);
+    assert.equal((await gateway.handle(req('/topics/x', SPOOFED))).status, 402);
+  });
+
   it('takes a shared store', async () => {
     const store = memoryQuotaStore();
     const a = gw({ suspectAllowance: { requests: 1, store } });
