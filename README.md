@@ -2,7 +2,7 @@
 
 Sell crawl access to AI training crawlers, by the day, over [x402](https://x402.org), settled by [CoinPay](https://coinpayportal.com).
 
-People read your site free. So do search engines and the retrieval crawlers behind AI answers, because they send readers back. A crawler that copies pages into a training corpus sends nobody back, so it pays: every page answers `402 Payment Required` with an x402 offer, paying the offer returns a signed pass, and the pass opens the site for a day.
+People read your site free. So do search engines and retrieval crawlers behind AI answers, because they send readers back. Training crawlers get 100 free requests per minute to evaluate the site and build an integration. After that allowance, a protected page answers `402 Payment Required` with an x402 offer; payment returns a signed pass that opens the site for a day.
 
 A crawler that wants longer buys more days in one payment. `?days=7` on the sales page quotes seven days at the daily price, and the days a proof buys are read off the value it authorizes, so paying seven times the price — however it was asked for — returns a pass that expires seven days out. `maxDays` caps how many one proof can buy.
 
@@ -17,7 +17,7 @@ npm install @profullstack/x402-gateway
 | Visitor | Gets |
 | --- | --- |
 | A person, Googlebot, Bingbot, Applebot, OAI-SearchBot, Claude-SearchBot, PerplexityBot… | the site, untouched |
-| GPTBot, ClaudeBot, CCBot, meta-externalagent, Bytespider, Applebot-Extended… | `402` with an x402 offer, or the HTML sales page if it asked for HTML |
+| GPTBot, ClaudeBot, CCBot, meta-externalagent, Bytespider, Applebot-Extended… | 100 free requests per minute to evaluate the site and build an integration, then `402` with an x402 offer |
 | Anyone at `/crawl` | the sales page (HTML, or always with `?format=html`) or the offer (JSON), and the place to pay. The 402 prose points at `/crawl?format=html`, so a client that sent no Accept header still reaches the explanation |
 | A request with a valid pass | the site |
 
@@ -91,6 +91,7 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 | `path` | `/crawl` | the sales page |
 | `openPaths` | `[]` | extra paths a refused crawler may read (`robots.txt`, the sales page, `security.txt` and `.well-known/` always are) |
 | `isPaidAgent` | training + scraper + headless lists | `(userAgent) => boolean` |
+| `botQuota` | `100` | free development requests per minute for declared paid crawlers; accepts the same store and identity options as `freeQuota`, or `false` to disable |
 | `scrapers` | `SCRAPER_AGENTS` | SEO resellers (AhrefsBot, SemrushBot, MJ12bot, DataForSeoBot, ...): charged and refused in robots.txt |
 | `headless` | `HEADLESS_AGENTS` | headless browsers that name themselves (Lightpanda, HeadlessChrome, PhantomJS): charged past `suspectAllowance` |
 | `aiIndex` | none | extra agents to charge and refuse in robots.txt. Since 0.10 the AI answer-engine indexers (`AI_INDEX_AGENTS`: meta-webindexer, YouBot, ExaSearchBot, AionBot) are welcome retrieval crawlers; pass `aiIndex: AI_INDEX_AGENTS` to charge them anyway |
@@ -119,15 +120,43 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 | `powerKeys` | Profullstack's | Power Keys honoured as a pass, kid to public key. `false` switches it off. See below. |
 | `revokedKeys` | | Power Key subjects no longer honoured |
 
-Without `coinpay.apiKey` and `payTo` the gateway still answers training crawlers with 402 and the page says payments are off. Nothing is sold, but nothing is given away either.
+Without `coinpay.apiKey` and `payTo`, the free development allowance still works. Paid access is unavailable after a caller uses it up.
+
+Training crawlers and other declared paid crawlers get `botQuota` first. It is keyed by caller address by default; its built-in store is in process, so each gateway process grants its own allowance. Provide a shared `store` to aggregate a caller's quota across processes or sites.
 
 ## One key for every site
 
-A day pass opens one site for a day. A [Power Key](https://profullstack.com/shop) is bought once and opens every Profullstack property for good: no crawler paywall, no allowance, no per-site pass. It is an Ed25519-signed token from [`@profullstack/keys`](https://www.npmjs.com/package/@profullstack/keys), and the gateway verifies it offline with the public key that package ships, so a site honours it with no configuration and no call to anyone.
+A day pass opens one site for a day. A [Power Key](https://profullstack.com/shop) opens every Profullstack property for the term encoded in it, including the $29/30-day Premier Developer Access plan. A lifetime key does not expire. Power Keys are Ed25519-signed tokens from [`@profullstack/keys`](https://www.npmjs.com/package/@profullstack/keys), and the gateway verifies them offline with the public key that package ships, so a site honours them with no configuration and no call to anyone.
 
 A client sends it as `Authorization: Bearer pfs_...`, in `x-power-key`, or as `x-api-key`. `passFrom` reads it and `verifyPass` verifies it, so a throttle built on the gateway skips it the same way it skips a day pass. The 402 body carries `powerKey: { shop, header }` and the sales page says where to buy one.
 
 Running the gateway somewhere that is not a Profullstack property? Pass `powerKeys: false`, or your own `{ kid: publicKey }` map to sell keys of your own with `mintKey` from the same package.
+
+## Automatic agent access with CoinPay
+
+Profullstack's shop has an agent-native endpoint at `https://profullstack.com/api/shop/agent`. It returns a `$29 USD / 30 days` x402 offer. After a successful x402 payment, the same response returns a fleet-wide Power Key and its expiration; there is no email or manual key delivery.
+
+An agent owner can register its CoinPay wallet and set a per-payment, daily, and total budget. CoinPay checks those limits before settling x402 v2 payments. An agent runtime can schedule this call shortly before the saved key expires, then replace the key in its own secret store:
+
+```js
+import { x402fetch } from '@profullstack/coinpay';
+
+export async function renewPowerKey({ signer, secretStore }) {
+  const response = await x402fetch('https://profullstack.com/api/shop/agent', {
+    paymentMethods: { base: { signer } },
+    preferredMethod: 'usdc_base',
+    maxAmount: '29.00',
+  });
+  if (!response.ok) throw new Error(`Power Key checkout failed: ${response.status}`);
+
+  const purchase = await response.json();
+  await secretStore.set('profullstack.powerKey', purchase.key);
+  await secretStore.set('profullstack.powerKeyExpiresAt', purchase.expires_at);
+  return purchase;
+}
+```
+
+Each renewal is a new x402 payment initiated by the agent. CoinPay enforces the wallet's configured limits on every payment settled through its x402 v2 endpoint; direct transfers that bypass CoinPay's x402 settlement do not use those budget checks. The merchant never stores the wallet signer. If the agent has no funds or reaches its budget, settlement is refused and the current key remains valid only until its recorded expiration. See the [agent workflow](https://profullstack.com/shop/agents) and MIT-licensed [server and renewal examples](./examples/premier-agent-access).
 
 ## A free allowance that sells instead of refusing
 

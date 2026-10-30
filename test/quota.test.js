@@ -20,6 +20,7 @@ const gateway = (freeQuota, extra = {}) =>
     coinpay: { apiKey: SECRET },
     payTo: PAY_TO,
     freeQuota,
+    botQuota: false,
     ...extra,
   });
 

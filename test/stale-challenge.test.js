@@ -16,6 +16,7 @@ const gw = (extra = {}) =>
     fetch: async () => new Response('{}'),
     // These suites test the rules; the allowance in front of them has its own (suspect-allowance.test.js).
     suspectAllowance: false,
+    botQuota: false,
     ...extra,
   });
 

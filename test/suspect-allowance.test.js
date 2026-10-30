@@ -17,6 +17,7 @@ const gw = (extra = {}) =>
     payTo: '0x1111111111111111111111111111111111111111',
     fetch: async () => new Response('{}'),
     chargeSpoofedBrowsers: true,
+    botQuota: false,
     ...extra,
   });
 

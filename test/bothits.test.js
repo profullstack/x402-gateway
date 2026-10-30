@@ -24,7 +24,7 @@ const req = (path, ua, headers = {}) =>
   new Request(`https://example.test${path}`, { headers: { 'user-agent': ua, 'sec-fetch-mode': 'navigate', ...headers } });
 
 const gatewayFor = (extra = {}) =>
-  createGateway({ siteUrl: 'https://example.test', coinpay: { apiKey: KEY }, payTo: PAY_TO, suspectAllowance: false, ...extra });
+  createGateway({ siteUrl: 'https://example.test', coinpay: { apiKey: KEY }, payTo: PAY_TO, suspectAllowance: false, botQuota: false, ...extra });
 
 describe('stale browser strings', () => {
   it('knows roughly where Chrome and Firefox are today', () => {
