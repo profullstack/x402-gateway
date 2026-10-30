@@ -18,7 +18,7 @@ const { key: yearKey } = await mintKey({
 });
 
 const gateway = (extra = {}) =>
-  createGateway({ siteUrl: 'https://site.test', coinpay: { apiKey: KEY }, payTo: PAY_TO, powerKeys: publicKeys, ...extra });
+  createGateway({ siteUrl: 'https://site.test', coinpay: { apiKey: KEY }, payTo: PAY_TO, powerKeys: publicKeys, botQuota: false, ...extra });
 
 const crawl = (headers = {}) => new Request('https://site.test/some/page', { headers: { 'user-agent': GPTBOT, ...headers } });
 
@@ -69,7 +69,7 @@ describe('a Power Key is a pass', () => {
   });
 
   it('defaults to Profullstack keys and says where to buy one', async () => {
-    const g = createGateway({ siteUrl: 'https://site.test', coinpay: { apiKey: KEY }, payTo: PAY_TO });
+    const g = createGateway({ siteUrl: 'https://site.test', coinpay: { apiKey: KEY }, payTo: PAY_TO, botQuota: false });
     assert.deepEqual(g.options.powerKeys, PROFULLSTACK_KEYS);
     const res = await g.handle(crawl({ accept: 'application/json' }));
     const body = await res.json();
