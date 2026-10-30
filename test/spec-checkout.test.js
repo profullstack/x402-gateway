@@ -68,6 +68,7 @@ const make = (extra = {}, cpOpts) => {
     coinpay: { apiKey: KEY, baseUrl: cp.baseUrl },
     payTo: PAY_TO,
     fetch: cp.fetch,
+    botQuota: false,
     ...extra,
   });
   return { gateway, cp };
@@ -103,7 +104,7 @@ describe('x402 v2 transport headers', () => {
   });
 
   it('sends no PAYMENT-REQUIRED when payments are off', async () => {
-    const gateway = createGateway({ siteUrl: 'https://example.test' });
+    const gateway = createGateway({ siteUrl: 'https://example.test', botQuota: false });
     const res = await gateway.handle(req('/x'));
     assert.equal(res.status, 402);
     assert.equal(res.headers.get('payment-required'), null);

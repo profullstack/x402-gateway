@@ -10,7 +10,7 @@ const CHROME = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KH
 const GOOGLEBOT = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
 
 const gw = (extra = {}) =>
-  createGateway({ siteUrl: 'https://example.test', coinpay: { apiKey: KEY }, payTo: PAY_TO, challenge: { paths: ['/i/'] }, ...extra });
+  createGateway({ siteUrl: 'https://example.test', coinpay: { apiKey: KEY }, payTo: PAY_TO, challenge: { paths: ['/i/'] }, botQuota: false, ...extra });
 const req = (path, ua = CHROME, headers = {}) =>
   new Request(`https://example.test${path}`, { headers: { 'user-agent': ua, 'sec-fetch-mode': 'navigate', 'x-real-ip': '198.51.100.7', ...headers } });
 

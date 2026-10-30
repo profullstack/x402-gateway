@@ -60,6 +60,7 @@ const gatewayFor = (extra = {}, script) => {
     fetch: cp.fetch,
     // These suites test the rules; the allowance in front of them has its own (suspect-allowance.test.js).
     suspectAllowance: false,
+    botQuota: false,
     ...extra,
   });
   return { gateway, cp };
@@ -423,7 +424,7 @@ describe('the gate', () => {
   });
 
   it('with no CoinPay key or payTo, refuses with an empty offer and says so on the page', async () => {
-    const gateway = createGateway({ siteUrl: 'https://example.test' });
+    const gateway = createGateway({ siteUrl: 'https://example.test', botQuota: false });
     assert.equal(gateway.enabled, false);
     const res = await gateway.handle(req('/x', { accept: 'application/json' }));
     assert.equal(res.status, 402);
@@ -564,7 +565,7 @@ describe('adapters', () => {
     assert.equal(await mw(c(req('/x', { ua: CHROME })), async () => nexted++), undefined);
     assert.equal(nexted, 1);
     // Options work too.
-    const fromOptions = x402Gateway({ siteUrl: 'https://example.test' });
+    const fromOptions = x402Gateway({ siteUrl: 'https://example.test', botQuota: false });
     assert.equal((await fromOptions(c(req('/x')), async () => {})).status, 402);
   });
   it('Next: returns the response or undefined, and serves robots.txt', async () => {

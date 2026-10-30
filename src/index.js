@@ -22,6 +22,10 @@ import {
   xnoRaw,
 } from './x402.js';
 
+// A process-local default shared by every gateway instance created from this
+// module copy. Separate processes and sites can supply a shared QuotaStore.
+const defaultBotQuotaStore = memoryQuotaStore();
+
 export {
   AI_INDEX_AGENTS,
   HEADLESS_AGENTS,
@@ -176,6 +180,7 @@ const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout'
  * @param {string} [options.path='/crawl']         the sales page
  * @param {string[]} [options.openPaths]           extra paths a refused crawler may read
  * @param {(ua: string) => boolean} [options.isPaidAgent]
+ * @param {number|object|false} [options.botQuota=100] free development requests per minute for callers the gateway would charge
  * @param {string[]} [options.denyCidrs]           IPv4 ranges answered 403 before anything else, e.g. a VPS fleet's provider
  * @param {boolean} [options.chargeSpoofedBrowsers=false]  charge a "Chrome/…" request that lacks the Sec-Fetch-Mode header every Chromium sends
  * @param {boolean} [options.chargeStaleBrowsers=true]  charge a desktop browser string two years behind its auto-updates (a rotation pool)
@@ -985,7 +990,15 @@ export function createGateway(options = {}) {
     }
 
     if (isOpen(path)) return null;
-    if (declaredPaid(request)) return sell(request);
+    if (declaredPaid(request)) {
+      if (o.botQuota && meters(o.botQuota, path)) {
+        const identity = o.botQuota.identify ? o.botQuota.identify(request) : clientIp(request);
+        const usage = await spend(o.botQuota, identity ? `bot:${identity}` : null);
+        if (usage?.overLimit) return sell(request, { usage, quota: o.botQuota });
+        return null;
+      }
+      return sell(request);
+    }
     if (suspectBrowser(request)) {
       const quota = o.suspectAllowance;
       // With `paths`, only those pages get the allowance (a homepage, say);
@@ -1247,11 +1260,19 @@ function normalise(options) {
     renderNotice: options.renderNotice ?? renderNotice,
     renderPassPage: options.renderPassPage ?? renderPassPage,
     freeQuota: normaliseQuota(options.freeQuota),
+    botQuota: normaliseBotQuota(options.botQuota),
     benefits: Array.isArray(options.benefits) ? options.benefits : null,
     powerKeys: options.powerKeys === false ? null : (options.powerKeys ?? PROFULLSTACK_KEYS),
     revokedKeys: options.revokedKeys ?? null,
     fetch: options.fetch ?? globalThis.fetch,
   };
+}
+
+function normaliseBotQuota(input) {
+  if (input === false) return null;
+  const config = input === undefined ? { requests: 100 } : typeof input === 'number' ? { requests: input } : input;
+  if (!config) return null;
+  return normaliseQuota({ ...config, store: config.store ?? defaultBotQuotaStore });
 }
 
 /** Whether a suspect allowance covers this path. Like `meters`, except '/' alone is the homepage, not every path. */

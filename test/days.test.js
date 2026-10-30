@@ -60,6 +60,7 @@ const gatewayFor = (extra = {}, script) => {
     payTo: PAY_TO,
     fetch: cp.fetch,
     onSale: (s) => sales.push(s),
+    botQuota: false,
     ...extra,
   });
   return { gateway, cp, sales };

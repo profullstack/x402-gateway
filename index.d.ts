@@ -149,6 +149,8 @@ export interface GatewayOptions {
    * that many requests per minute. A valid pass is never metered.
    */
   freeQuota?: number | FreeQuotaOptions;
+  /** Free requests per minute for declared paid crawlers before a 402. Default: 100; uses an in-process store unless a shared store is supplied. `false` disables it. */
+  botQuota?: number | FreeQuotaOptions | false;
   /** What a pass unlocks, listed on the sales page and in the 402 body. */
   benefits?: string[];
   /**
@@ -238,7 +240,7 @@ export interface QuotaUsage {
 /** The allowance a 402 should quote, when the caller kept the count itself. */
 export interface SellContext {
   usage?: QuotaUsage | null;
-  /** Defaults to the gateway's own `freeQuota`. */
+  /** Defaults to the gateway's own `freeQuota`; set it when returning a botQuota offer. */
   quota?: { requests: number; windowSeconds: number } | null;
 }
 
