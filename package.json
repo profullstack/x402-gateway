@@ -55,6 +55,10 @@
     "./edge": {
       "types": "./index.d.ts",
       "import": "./src/edge.js"
+    },
+    "./nano-claims-file": {
+      "types": "./index.d.ts",
+      "import": "./src/nano-claims-file.js"
     }
   },
   "types": "./index.d.ts",

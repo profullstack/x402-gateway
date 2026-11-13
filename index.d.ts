@@ -79,8 +79,15 @@ export interface GatewayOptions {
    * 1 XNO in `currency`, as a number or a function read per offer. Without a
    * valid payee and a positive rate the offer is USDC only. CoinPay refuses
    * Nano proofs unless its NANO_RPC_URL is set.
+   *
+   * With `rpcUrl` (https, or http on localhost) and `claims`, Nano proofs are
+   * read from that node instead: the send must commit to an order in its
+   * representative (xno-binding v1), the proof carries that `orderId`, the
+   * amount must be exact, and each block and order id is credited once.
+   * `claims` must survive a restart: `fileClaims(path)` from
+   * `@profullstack/x402-gateway/nano-claims-file`, or your own table.
    */
-  nano?: { payTo: string; rate: number | (() => number) };
+  nano?: { payTo: string; rate: number | (() => number); rpcUrl?: string; claims?: NanoClaims };
   /** Default 100 ($1). */
   priceCents?: number;
   currency?: string;
@@ -336,9 +343,29 @@ export function readPass(token: string, args: { secret: string; now?: number }):
 
 export const METHODS: Array<{ key: string; network: string; asset: string; label: string }>;
 export const X402_METHODS: typeof METHODS;
-export function buildOffer(args: { payTo: string; priceCents: number; resource: string; description?: string; maxTimeoutSeconds?: number; methods?: typeof METHODS; nano?: { payTo: string; amount: string } | null }): Offer;
-/** A Nano payee in canonical `nano_` form, or null. */
+export function buildOffer(args: { payTo: string; priceCents: number; resource: string; description?: string; maxTimeoutSeconds?: number; methods?: typeof METHODS; nano?: { payTo: string; amount: string; binding?: boolean } | null }): Offer;
+/** A Nano payee in canonical `nano_` form, or null (bad format or checksum). */
 export function nanoPayee(address: unknown): string | null;
+/** A checksum-valid Nano account in canonical `nano_` form, or null. */
+export function canonicalAccount(address: unknown): string | null;
+/** Where credited Nano blocks are remembered; both the hash and the order id are held once. */
+export interface NanoClaims {
+  claim(hash: string, orderId: string, at: number): { status: 'new' | 'same' | 'taken'; at?: number } | Promise<{ status: 'new' | 'same' | 'taken'; at?: number }>;
+}
+/** Claims in memory: a restart forgets them. For tests only. */
+export function memoryClaims(): NanoClaims;
+/** Claims appended and fsynced to `path`, read back on start (./nano-claims-file). */
+export function fileClaims(path: string): NanoClaims & { readonly size: number };
+/** A fresh random order id (16 bytes, base64url). */
+export function newOrderId(): string;
+/** The representative a payer sets on its send to bind it to an order (xno-binding v1). */
+export function orderRepresentative(args: { orderId: string; payTo: string; amount: string }): Promise<string>;
+/** Read a Nano proof's block from a node and claim it. */
+export function settleNano(
+  payment: Record<string, any>,
+  expected: { amount: string; payTo: string },
+  options: { rpcUrl: string; claims: NanoClaims; fetch?: typeof fetch; now?: () => number },
+): Promise<{ ok: true; payer: string | null; ref: string; txHash: string; network: 'nano' } | { ok: false; reason: string; replay: boolean; claimedAt?: number }>;
 /** A price in raw XNO (10^30 per XNO), rounded up, at `rate` per XNO; null if either is not positive. */
 export function xnoRaw(priceCents: number, rate: number): string | null;
 export function decodePayment(header: string | null | undefined): Record<string, unknown> | null;
