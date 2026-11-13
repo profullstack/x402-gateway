@@ -18,6 +18,8 @@
  * installing, and because a gateway that runs at the edge cannot import node:.
  */
 
+import { BINDING, canonicalAccount, newOrderId } from './nano.js';
+
 /**
  * The three things CoinPay can settle under the `exact` scheme. USDC only:
  * EIP-3009 is an ERC-20 extension, so native ETH cannot be paid this way.
@@ -68,13 +70,13 @@ const DOMAIN = { name: 'USD Coin', version: '2' };
  * asking price to `payTo`. Nothing is signed or broadcast, so the buyer sends
  * the block first and presents its hash. Amounts are in raw, 10^30 per XNO.
  */
-const NANO_ADDRESS = /^(nano|xrb)_[13][13456789abcdefghijkmnopqrstuwxyz]{59}$/;
-
-/** A Nano payee in canonical `nano_` form, or null if it is not one. */
+/**
+ * A Nano payee in canonical `nano_` form, or null if it is not one. The
+ * checksum is checked too: a mistyped address can still fit the alphabet,
+ * and money sent to it is gone.
+ */
 export function nanoPayee(address) {
-  const a = String(address ?? '').trim().toLowerCase();
-  if (!NANO_ADDRESS.test(a)) return null;
-  return a.startsWith('xrb_') ? `nano_${a.slice(4)}` : a;
+  return canonicalAccount(address);
 }
 
 /**
@@ -129,7 +131,13 @@ export function buildOffer({
             description,
             mimeType: 'application/json',
             maxTimeoutSeconds,
-            extra: { decimals: 30 },
+            /*
+             * With `binding`, the send must commit to an order in its
+             * representative (see nano.js). The order id offered here is a
+             * fresh random one; the payer may use it or its own, and must
+             * present the one it signed for with the block hash.
+             */
+            extra: nano.binding ? { decimals: 30, binding: BINDING, orderId: newOrderId() } : { decimals: 30 },
           },
         ]
       : [];
@@ -206,6 +214,7 @@ export function decodePayment(header) {
     payload.network = 'nano';
     payload.scheme = payload.scheme || parsed.scheme || 'exact';
     if (!payload.blockHash && parsed.blockHash) payload.blockHash = parsed.blockHash;
+    if (!payload.orderId && parsed.orderId) payload.orderId = parsed.orderId;
     if (!payload.to && chosen?.payTo) payload.to = chosen.payTo;
     if (payload.amount === undefined && chosen?.amount) payload.amount = String(chosen.amount);
     return { ...parsed, x402Version: 1, scheme: payload.scheme, network: 'nano', payload };

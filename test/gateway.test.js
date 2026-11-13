@@ -8,6 +8,7 @@ import { robotsRoute, x402Proxy } from '../src/next.js';
 import { mintPass, readPass } from '../src/pass.js';
 import { robotsTxt } from '../src/robots.js';
 import { buildOffer, decodePayment, expectedFor, METHODS, nanoPayee, nonceOf, validBeforeOf, xnoRaw } from '../src/x402.js';
+import { memoryClaims, orderRepresentative } from '../src/nano.js';
 
 const META = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (compatible; meta-externalagent/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler))';
 const CHROME = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0 Safari/537.36';
@@ -246,6 +247,80 @@ describe('XNO on Nano, opt-in', () => {
     assert.equal(res.status, 200);
     assert.equal((await res.json()).days, 3);
     assert.equal(cp.calls[0].body.expected.amount, three);
+  });
+  describe('checked by its own node', () => {
+    const ORDER = 'b3JkZXItZm9yLWdhdGV3YXk';
+    const NODE = 'https://node.test/rpc';
+    /** A node that knows BLOCK as a confirmed send of `amount` to NANO, and a CoinPay that must not be asked. */
+    const wire = async ({ amount = RAW_AT_080, orderId = ORDER } = {}) => {
+      const representative = await orderRepresentative({ orderId, payTo: NANO, amount });
+      const nodeCalls = [];
+      const coinpayCalls = [];
+      const fetch = async (url, init) => {
+        if (String(url).startsWith(NODE)) {
+          nodeCalls.push(JSON.parse(init.body));
+          return new Response(
+            JSON.stringify({
+              block_account: 'nano_1111111111111111111111111111111111111111111111111111hifc8npp',
+              amount,
+              confirmed: 'true',
+              subtype: 'send',
+              contents: { type: 'state', representative, link_as_account: NANO },
+            }),
+          );
+        }
+        coinpayCalls.push(url);
+        return new Response('{}', { status: 500 });
+      };
+      return { fetch, nodeCalls, coinpayCalls };
+    };
+    const nanoProof = (orderId = ORDER) =>
+      toBase64({
+        x402Version: 2,
+        accepted: { scheme: 'exact', network: 'nano', amount: RAW_AT_080, asset: 'XNO', payTo: NANO },
+        payload: { blockHash: BLOCK, orderId },
+      });
+
+    it('offers the binding and an order id, and only when a node is set', async () => {
+      const w = await wire();
+      const { gateway } = gatewayFor({ fetch: w.fetch, nano: { payTo: NANO, rate: 0.8, rpcUrl: NODE, claims: memoryClaims() } });
+      const xno = (await (await gateway.handle(req('/crawl', { accept: 'application/json' }))).json()).accepts[3];
+      assert.equal(xno.extra.binding, 'xno-binding/v1/rep');
+      assert.match(xno.extra.orderId, /^[A-Za-z0-9_-]{22}$/);
+      const { gateway: plain } = gatewayFor({ nano: { payTo: NANO, rate: 0.8 } });
+      const before = (await (await plain.handle(req('/crawl', { accept: 'application/json' }))).json()).accepts[3];
+      assert.deepEqual(before.extra, { decimals: 30 });
+    });
+    it('settles a bound block with the node, not CoinPay, and credits it once', async () => {
+      const w = await wire();
+      const sales = [];
+      const { gateway } = gatewayFor({ fetch: w.fetch, onSale: (s) => sales.push(s), nano: { payTo: NANO, rate: 0.8, rpcUrl: NODE, claims: memoryClaims() } });
+      const first = await gateway.handle(req('/crawl', { headers: { 'payment-signature': nanoProof() } }));
+      assert.equal(first.status, 200);
+      const body = await first.json();
+      assert.equal(body.replayed, false);
+      assert.equal(w.nodeCalls[0].hash, BLOCK);
+      assert.deepEqual(w.coinpayCalls, []);
+      assert.equal(sales.length, 1);
+      // Lost the answer, asked again with the same block and order: a pass, no second sale.
+      const again = await gateway.handle(req('/crawl', { headers: { 'payment-signature': nanoProof() } }));
+      assert.equal(again.status, 200);
+      const second = await again.json();
+      assert.equal(second.replayed, true);
+      assert.equal(second.expires_at, body.expires_at);
+      assert.equal(sales.length, 1);
+    });
+    it('refuses the same block hash with an order id it was not signed for', async () => {
+      const w = await wire();
+      const { gateway } = gatewayFor({ fetch: w.fetch, nano: { payTo: NANO, rate: 0.8, rpcUrl: NODE, claims: memoryClaims() } });
+      const res = await gateway.handle(req('/crawl', { headers: { 'payment-signature': nanoProof('c29tZW9uZS1lbHNlcy1vcmRlcg') } }));
+      assert.equal(res.status, 402);
+      assert.match((await res.json()).error, /not bound to this order/);
+    });
+    it('will not read a node without a claims store, or over plain http off localhost', () => {
+      assert.throws(() => gatewayFor({ nano: { payTo: NANO, rate: 0.8, rpcUrl: NODE } }), /needs nano\.claims/);
+      assert.throws(() => gatewayFor({ nano: { payTo: NANO, rate: 0.8, rpcUrl: 'http://node.test', claims: memoryClaims() } }), /https/);
+    });
   });
   it('leaves the EVM proof path as it was', () => {
     const payment = decodePayment(proof());

@@ -7,6 +7,7 @@ import { checkoutClient, isEmail, isSessionId, sessionIdFromWebhook, sessionStat
 import { renderNotice, renderPage, renderPassPage } from './page.js';
 import { mintPass, readPass } from './pass.js';
 import { robotsTxt } from './robots.js';
+import { nodeUrl, settleNano } from './nano.js';
 import {
   buildOffer,
   decodePayment,
@@ -61,6 +62,7 @@ export { renderNotice, renderPage, renderPassPage } from './page.js';
 export { checkoutClient, sessionIdFromWebhook, sessionState } from './checkout.js';
 export { mintPass, readPass } from './pass.js';
 export { robotsTxt } from './robots.js';
+export { canonicalAccount, memoryClaims, newOrderId, orderRepresentative, settleNano } from './nano.js';
 export {
   buildOffer,
   decodeHeader,
@@ -171,7 +173,7 @@ const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout'
  * @param {string} [options.siteName]              for the page; defaults to the hostname
  * @param {{apiKey: string, baseUrl?: string}} [options.coinpay]  a SCOPED CoinPay key (cp_live_…) with payments:create
  * @param {string} [options.payTo]                 EVM address that receives the USDC
- * @param {{payTo: string, rate: number|(() => number)}} [options.nano]  opt-in XNO on Nano: a nano_ (or xrb_) payee and the price of 1 XNO in `currency`; CoinPay must have NANO_RPC_URL set
+ * @param {{payTo: string, rate: number|(() => number), rpcUrl?: string, claims?: {claim: Function}}} [options.nano]  opt-in XNO on Nano: a nano_ (or xrb_) payee and the price of 1 XNO in `currency`; CoinPay must have NANO_RPC_URL set. With `rpcUrl` (https, or http on loopback) and `claims` (e.g. `fileClaims` from `@profullstack/x402-gateway/nano-claims-file`), Nano proofs are read from that node instead of CoinPay, must be bound to an order (xno-binding v1) and are credited once, across restarts
  * @param {number} [options.priceCents=100]
  * @param {string} [options.currency='USD']
  * @param {number} [options.passMinutes=1440]          a day: the term one payment buys
@@ -316,7 +318,7 @@ export function createGateway(options = {}) {
       return null;
     }
     const raw = xnoRaw(o.priceCents, rate);
-    return raw ? { payTo: o.nano.payTo, amount: String(BigInt(raw) * BigInt(days)) } : null;
+    return raw ? { payTo: o.nano.payTo, amount: String(BigInt(raw) * BigInt(days)), binding: Boolean(o.nano.rpcUrl) } : null;
   };
 
   /** The offer for `days` terms: the same entries, `days` times the price. */
@@ -597,12 +599,26 @@ export function createGateway(options = {}) {
       const now = Math.floor(Date.now() / 1000);
       const coinpay = { apiKey: o.coinpay.apiKey, baseUrl: o.coinpay.baseUrl, fetch: o.fetch };
       const sale = await saleContext(request, 'x402');
-      const result = await verifyAndSettle(payment, expected, { ...coinpay, metadata: sale });
+      // With its own node configured, a Nano proof is read there and claimed here; CoinPay is not asked.
+      const direct = payment.network === 'nano' && Boolean(o.nano?.rpcUrl);
+      const result = direct
+        ? await settleNano(payment, expected, { rpcUrl: o.nano.rpcUrl, claims: o.nano.claims, fetch: o.fetch, now: () => now })
+        : await verifyAndSettle(payment, expected, { ...coinpay, metadata: sale });
 
       let expiresAt = null;
       let replayed = false;
       if (result.ok) {
         expiresAt = now + term;
+      } else if (result.replay && direct) {
+        /*
+         * The same block for the same order, presented again: the payer lost
+         * our answer. The claim remembers when it was first credited, so the
+         * pass it gets back ends where the first one did.
+         */
+        if (Number.isFinite(result.claimedAt)) {
+          expiresAt = result.claimedAt + term;
+          replayed = true;
+        }
       } else if (result.replay) {
         /*
          * Paid once, lost the answer, asked again with the same proof. Answered
@@ -1197,6 +1213,23 @@ export function daysPaid(value, unit, maxDays) {
   return Number(days);
 }
 
+/**
+ * The Nano settings. A node URL is opt-in and comes with a claims store, or
+ * not at all: reading blocks from a node without remembering which ones were
+ * credited would sell the same block again and again.
+ */
+function normaliseNano(nano) {
+  const payTo = nanoPayee(nano?.payTo);
+  if (!payTo) return null;
+  if (!nano.rpcUrl) return { payTo, rate: nano.rate };
+  const rpcUrl = nodeUrl(nano.rpcUrl);
+  if (!rpcUrl) throw new Error('nano.rpcUrl must be https, or http on localhost');
+  if (typeof nano.claims?.claim !== 'function') {
+    throw new Error('nano.rpcUrl needs nano.claims, a store that remembers credited blocks across restarts (fileClaims from @profullstack/x402-gateway/nano-claims-file)');
+  }
+  return { payTo, rate: nano.rate, rpcUrl, claims: nano.claims };
+}
+
 function normalise(options) {
   const siteUrl = String(options.siteUrl ?? '').replace(/\/+$/, '');
   if (!siteUrl) throw new Error('createGateway needs siteUrl');
@@ -1214,7 +1247,7 @@ function normalise(options) {
       baseUrl: (options.coinpay?.baseUrl ?? 'https://coinpayportal.com').replace(/\/+$/, ''),
     },
     payTo: options.payTo ?? '',
-    nano: nanoPayee(options.nano?.payTo) ? { payTo: nanoPayee(options.nano.payTo), rate: options.nano.rate } : null,
+    nano: normaliseNano(options.nano),
     priceCents: Number.isFinite(options.priceCents) ? options.priceCents : 100,
     currency: options.currency ?? 'USD',
     passMinutes: Number.isFinite(options.passMinutes) && options.passMinutes > 0 ? options.passMinutes : 1440,

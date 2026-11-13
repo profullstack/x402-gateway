@@ -243,6 +243,30 @@ USDC on Base, Polygon and Ethereum, and nothing else on purpose: CoinPay's v2 se
 
 The exception, opt-in, is XNO with `nano` set. CoinPay settles network `nano` without a relayer: the buyer publishes a send block to `nano.payTo`, and CoinPay's verify and settle ask a Nano node that the block is a confirmed send of at least the quoted raw amount to that address. The block hash is the replay key and the pass's `ref`. CoinPay needs `NANO_RPC_URL` for this; without it every Nano proof is refused.
 
+### XNO checked by your own node (opt-in)
+
+A Nano block has no memo and its hash is public, so "a confirmed send of the price to `payTo`" does not say which sale it paid for, and anyone reading the ledger can present it. With `nano.rpcUrl` and `nano.claims` set, the gateway reads Nano proofs from that node itself (`block_info`, no key) and CoinPay is not asked about them:
+
+```js
+import { createGateway } from '@profullstack/x402-gateway';
+import { fileClaims } from '@profullstack/x402-gateway/nano-claims-file';
+
+const gateway = createGateway({
+  // ...as above
+  nano: {
+    payTo: 'nano_…',
+    rate: 0.8,
+    rpcUrl: 'https://your-node.example/rpc', // https, or http on localhost
+    claims: fileClaims('/var/lib/x402-gateway/nano-claims.log'),
+  },
+});
+```
+
+- **Bound to the order** ([xno-binding v1](https://github.com/dhyabi2/xno-call-binding/blob/main/docs/BINDING-STANDARD.md), option C). The Nano entry's `extra` carries `binding: "xno-binding/v1/rep"` and a random `orderId`. The payer signs its send with `representative` set to the account encoding of `SHA-256("xno-binding/v1/rep|" + orderId + "|" + payTo + "|" + amountRaw)` (`orderRepresentative()` computes it), and presents `payload.orderId` with `payload.blockHash`. A block hash without the order id it was signed for is refused.
+- **Exact.** The block must be confirmed, a send, to `payTo`, of exactly the offered raw amount for the days paid.
+- **Once, across restarts.** Each block hash and each order id is credited once; `fileClaims` appends and fsyncs every claim and reads the file back on start (one process per file). The same block with the same order id again gets back a pass that ends where the first one did.
+- `nanoPayee` now checks the address checksum, so a mistyped payee is refused at start rather than offered.
+
 ## Who is on which list
 
 `TRAINING_AGENTS` is the documented corpus-crawl token of each operator; `RETRIEVAL_AGENTS` the search half of the same pairs: GPTBot / OAI-SearchBot, ClaudeBot / Claude-SearchBot, meta-externalagent / Meta-ExternalFetcher, Applebot-Extended / Applebot. Google-Extended stays welcome because Google documents it as also gating Gemini app grounding. Matching is a substring of the user agent, which identifies a self-declared crawler and nothing more: a crawler wearing a browser's user agent walks past this, and that one needs blocking at the edge.
