@@ -184,7 +184,7 @@ const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout'
  * @param {string} [options.path='/crawl']         the sales page
  * @param {string[]} [options.openPaths]           extra paths a refused crawler may read
  * @param {(ua: string) => boolean} [options.isPaidAgent]
- * @param {number|object|false} [options.botQuota=100] free development requests per minute for callers the gateway would charge
+ * @param {number|object|false} [options.botQuota=false] opt-in free development requests per minute (e.g. 100) for callers the gateway would charge
  * @param {string[]} [options.denyCidrs]           IPv4 ranges answered 403 before anything else, e.g. a VPS fleet's provider
  * @param {boolean} [options.chargeSpoofedBrowsers=false]  charge a "Chrome/…" request that lacks the Sec-Fetch-Mode header every Chromium sends
  * @param {boolean} [options.chargeStaleBrowsers=true]  charge a desktop browser string two years behind its auto-updates (a rotation pool)
@@ -1380,7 +1380,7 @@ function normalise(options) {
 
 function normaliseBotQuota(input) {
   if (input === false) return null;
-  const config = input === undefined ? { requests: 100 } : typeof input === 'number' ? { requests: input } : input;
+  const config = input === undefined ? null : typeof input === 'number' ? { requests: input } : input;
   if (!config) return null;
   return normaliseQuota({ ...config, store: config.store ?? defaultBotQuotaStore });
 }

@@ -150,3 +150,19 @@ describe('massScrape gate', () => {
     assert.equal(g.massScrapeState().reported, 3);
   });
 });
+
+describe('botQuota is opt-in (0.18.1)', () => {
+  it('a declared training crawler pays from its first request by default', async () => {
+    const g = createGateway({
+      siteUrl: 'https://example.test',
+      coinpay: { apiKey: 'cp_live_test', baseUrl: 'https://coinpay.test' },
+      payTo: '0x1111111111111111111111111111111111111111',
+      fetch: async () => new Response('{}'),
+      checkout: false,
+    });
+    const res = await g.handle(
+      new Request('https://example.test/post/1', { headers: { 'user-agent': 'Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)', 'x-real-ip': '192.0.2.50' } }),
+    );
+    assert.equal(res.status, 402);
+  });
+});
