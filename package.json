@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/x402-gateway",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "type": "module",
   "description": "Sell crawl access to AI training crawlers by the day over x402, settled by CoinPay. One middleware: free bot development quotas, 402 offers, signed passes, Profullstack Power Keys, and robots.txt for search crawlers.",
   "keywords": [

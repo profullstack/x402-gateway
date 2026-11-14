@@ -217,6 +217,17 @@ key or an account, and the allowance becomes exact.
 
 The lists catch crawlers that name themselves. Two do not: a VPS fleet wearing a browser string, and a residential-proxy rotation cycling a few Chrome strings across hundreds of addresses. `denyCidrs` handles the first (`['51.38.0.0/16', '54.38.0.0/16', …]` for one provider's ranges); `chargeSpoofedBrowsers` handles both by asking a question only a browser can answer. A request that answers it is left alone. One that cannot gets the same 402 as GPTBot, which costs the site a hash instead of a render.
 
+## Swarms that rotate every page (massScrape, on by default since 0.18)
+
+A residential swarm that fetches one page per address passes every per-address test there is, the script challenge included: nichedb.dev on 2026-11-14 served ~6,000 item pages an hour to ~4,650 addresses, 3,934 of which read exactly one page. What it cannot hide is the total. Past 60 anonymous page loads a minute across the whole site, every anonymous page load is answered 402 with the x402 offer for the next 30 minutes, and one address past 120 page loads an hour pays too. The homepage, sign-in and app paths, `openPaths`, passes, Power Keys, a VERIFIED credential (`authenticate`) and welcome search crawlers still read. `exempt` does not: it runs after this gate, because a session cookie that is merely present is something a swarm can send.
+
+Every refusal is counted and posted to CrawlProof once a minute (`/api/tracker/v1/bot-hits`, bucket `bot:swarm`, keyed by the site's hostname), so the swarm shows on the stats page as bot traffic instead of vanishing behind a 402 that carries no beacon.
+
+```js
+createGateway({ ..., massScrape: { requests: 120, paths: ['/i/', '/c/'] } }); // or massScrape: false
+gateway.massScrapeState(); // { on, count, threshold, since, until, peak, reported }
+```
+
 ## How the money moves
 
 The offer is x402 v2 in CoinPay's dialect (and in the spec's `PAYMENT-REQUIRED` header): USDC under the `exact` scheme on Base, Polygon or Ethereum, EIP-3009 `transferWithAuthorization`. The buyer signs, the gateway sends the proof to CoinPay's `/api/x402/verify` and `/api/x402/settle`, and CoinPay's relayer broadcasts the transfer, paying the gas. The USDC goes straight to `payTo`.

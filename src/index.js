@@ -7,6 +7,7 @@ import { checkoutClient, isEmail, isSessionId, sessionIdFromWebhook, sessionStat
 import { renderNotice, renderPage, renderPassPage } from './page.js';
 import { mintPass, readPass } from './pass.js';
 import { robotsTxt } from './robots.js';
+import { botHitReporter, massCounter } from './mass.js';
 import { nodeUrl, settleNano } from './nano.js';
 import {
   buildOffer,
@@ -62,6 +63,7 @@ export { renderNotice, renderPage, renderPassPage } from './page.js';
 export { checkoutClient, sessionIdFromWebhook, sessionState } from './checkout.js';
 export { mintPass, readPass } from './pass.js';
 export { robotsTxt } from './robots.js';
+export { botHitReporter, massCounter } from './mass.js';
 export { canonicalAccount, memoryClaims, newOrderId, orderRepresentative, settleNano } from './nano.js';
 export {
   buildOffer,
@@ -197,6 +199,7 @@ const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout'
  * @param {(request: Request) => boolean} [options.exempt]  requests never charged, e.g. ones carrying a signed-in cookie
  * @param {(request: Request) => boolean|null|Promise<boolean|null>} [options.authenticate]  verify the site's own credential (API key, session bearer): true is never charged, false is answered 401, null (no credential) carries on; must VERIFY, not test for a header
  * @param {number|{requests: number, windowSeconds?: number, paths?: string[], identify?: (request: Request) => string|null, store?: object}|false} [options.suspectAllowance]  requests charged only for a spoofed, stale or headless browser string read this many pages per address first (default 20 an hour); with `paths`, only on those paths or prefixes (a trailing / is a prefix, but '/' alone is the homepage); false charges them on the first request
+ * @param {{paths: string[], requests?: number, windowSeconds?: number, holdSeconds?: number, perAddress?: {requests: number, windowSeconds?: number}|false, report?: {url?: string, token?: string, site?: string, bucket?: string, everySeconds?: number}, onChange?: (state: object) => void}|false} [options.massScrape]  when anonymous reads of these paths, summed over every address, pass `requests` per `windowSeconds` (default 60 a minute), every read there without a pass is answered 402 with the x402 offer until the rate has stayed under for `holdSeconds` (default 1800); with `perAddress` (default 60 an hour) one address reading past it pays too. Passes, Power Keys, `exempt`, `authenticate` and welcome crawlers are untouched. With `report`, the refused requests are posted to CrawlProof as bot hits (bucket `bot:swarm`) once a minute. On by default (`false` turns it off); with no `paths` it counts every page load but the homepage. `report` defaults to the siteUrl hostname with no token; `report: false` stops it
  * @param {string[]|false} [options.appPaths]       extra sign-in, account and payment paths never charged, added to APP_PATHS; `false` charges them like any page
  * @param {string} [options.secret]                pass signing secret; defaults to the CoinPay key
  * @param {Record<string,string>|false} [options.powerKeys]  kid -> public key of the Power Keys honoured as a pass; defaults to Profullstack's, `false` switches it off
@@ -218,6 +221,9 @@ export function createGateway(options = {}) {
   const openPaths = ['/robots.txt', o.path, '/security.txt', '/.well-known/', ...o.openPaths];
   const denied = compileCidrs(o.denyCidrs);
   const isOpen = (path) => openPaths.some((p) => (p.endsWith('/') ? path.startsWith(p) : path === p));
+
+  const mass = o.massScrape ? massCounter(o.massScrape) : null;
+  const massReport = mass && o.massScrape.report ? botHitReporter(o.massScrape.report, o.fetch) : null;
 
   const money = (cents) => `${(cents / 100).toFixed(2)} ${o.currency}`;
   const price = money(o.priceCents);
@@ -690,8 +696,22 @@ export function createGateway(options = {}) {
       );
     }
 
+    const massCtx = context.mass ?? null;
     if (wantsHtml(request.headers.get('accept')) || new URL(request.url).searchParams.get('format') === 'html') {
-      return html(o.page(await pageCtxFor(request, asked, usage, quota)), 402, { ...rateHeaders, ...required(asked) });
+      const ctx = await pageCtxFor(request, asked, usage, quota);
+      if (massCtx) ctx.mass = massCtx;
+      return html(o.page(ctx), 402, { ...rateHeaders, ...required(asked) });
+    }
+    if (massCtx) {
+      return json(
+        receipt(asked, {
+          error: massCtx.surge
+            ? `${o.siteName} is being scraped in bulk, so its pages are read with a pass right now: ${price} a day.`
+            : 'This address has read more pages than a person does. Buy a pass to keep reading.',
+        }),
+        402,
+        required(asked),
+      );
     }
 
     if (usage && quota) {
@@ -946,6 +966,36 @@ export function createGateway(options = {}) {
     return null;
   }
 
+  /** The mass-scrape gate: a 402 when it is on (or this address reads too much), else null. */
+  async function massGate(request, path) {
+    if (request.method !== 'GET' && request.method !== 'HEAD') return null;
+    if (o.massScrape.paths) {
+      if (!meters(o.massScrape, path)) return null;
+    } else if (path === '/' || !isPageLoad(request)) {
+      return null;
+    }
+    if (o.appPaths && isAppPath(path, o.appPaths)) return null;
+    if (isOpen(path)) return null;
+    if (await honours(passFrom(request))) return null;
+    if ((await authenticated(request)) === true) return null;
+    if (isWelcome(request)) return null;
+    const seen = mass.hit();
+    if (seen.tripped && o.massScrape.onChange) {
+      try {
+        o.massScrape.onChange(mass.state());
+      } catch {}
+    }
+    let heavy = false;
+    if (o.massScrape.perAddress) {
+      const ip = clientIp(request);
+      const usage = ip ? await spend(o.massScrape.perAddress, `mass:${ip}`) : null;
+      heavy = Boolean(usage?.overLimit);
+    }
+    if (!seen.on && !heavy) return null;
+    massReport?.count(path);
+    return sell(request, { mass: { heavy, surge: seen.on } });
+  }
+
   /**
    * The gate. Null means "not for me, carry on".
    *
@@ -976,6 +1026,21 @@ export function createGateway(options = {}) {
     // The challenge stylesheet answers everyone: fetching it is the test.
     if (o.challenge?.cssPath && secret && path.startsWith(o.challenge.cssPath)) {
       return stylesheetResponse(request, { secret, cookie: o.challenge.cookie, ip: clientIp(request), cssPath: o.challenge.cssPath });
+    }
+    /*
+     * Mass scraping. A swarm that rotates its address every page passes every
+     * per-address test, the script challenge included (nichedb 2026-11-14:
+     * ~6,000 item pages an hour to ~4,650 addresses, 3,934 of them reading one
+     * page each, all solving the stylesheet + proof-of-work challenge). What
+     * it cannot hide is the total. Past the site-wide rate, every anonymous
+     * read is sold: x402, a day pass or a Power Key. Checked before `exempt`,
+     * because every fleet `exempt` only tests that a session cookie exists,
+     * and a swarm can send one. A site's VERIFIED credential (`authenticate`)
+     * still reads, as do welcome crawlers and the sign-in and app paths.
+     */
+    if (mass) {
+      const answer = await massGate(request, path);
+      if (answer) return answer;
     }
     if (o.exempt && o.exempt(request)) return null;
     // Signing in, paying and running an account are never sold. See APP_PATHS.
@@ -1101,6 +1166,10 @@ export function createGateway(options = {}) {
      */
     passFrom,
     verifyPass: honours,
+    /** The mass-scrape gate's counter: on, the current rate, since/until. Null when off. */
+    massScrapeState: () => (mass ? { ...mass.state(), reported: massReport?.sent() ?? null } : null),
+    /** Post any counted bot hits now (tests, shutdown). */
+    flushBotHits: () => massReport?.flush() ?? Promise.resolve(null),
     /**
      * Whether a request is a charged crawler by this gateway's rules (the
      * lists, a spoofed or a stale browser string), and whether it is a welcome
@@ -1159,6 +1228,13 @@ const esc = (s) =>
     .replace(/"/g, '&quot;');
 
 /** Whether the caller would rather read a page than a JSON offer. */
+/** A top-level page load: a navigation, or a request that asks for HTML. */
+export const isPageLoad = (request) => {
+  const dest = request.headers.get('sec-fetch-dest');
+  if (dest) return dest === 'document';
+  return wantsHtml(request.headers.get('accept'));
+};
+
 export const wantsHtml = (accept = '') => String(accept ?? '').toLowerCase().includes('text/html');
 
 /** Fetch destinations a page load produces: the document itself and what it pulls in. */
@@ -1278,6 +1354,7 @@ function normalise(options) {
             when: typeof options.challenge.when === 'function' ? options.challenge.when : null,
           }
         : null,
+    massScrape: normaliseMass(options.massScrape, siteUrl),
     welcome: options.welcome === false ? null : (options.welcome ?? WELCOME_CRAWLERS),
     verifiedRetrieval: options.verifiedRetrieval === false ? null : (options.verifiedRetrieval ?? VERIFIED_RETRIEVAL),
     retrieval: options.retrieval ?? RETRIEVAL_AGENTS,
@@ -1306,6 +1383,24 @@ function normaliseBotQuota(input) {
   const config = input === undefined ? { requests: 100 } : typeof input === 'number' ? { requests: input } : input;
   if (!config) return null;
   return normaliseQuota({ ...config, store: config.store ?? defaultBotQuotaStore });
+}
+
+function normaliseMass(input, siteUrl) {
+  if (input === false) return null;
+  const config = input && typeof input === 'object' ? input : {};
+  const pos = (v, d) => (Number.isFinite(v) && v > 0 ? v : d);
+  const per = config.perAddress === false ? null : (config.perAddress ?? { requests: 120, windowSeconds: 3600 });
+  const report = config.report === false ? null : { site: new URL(siteUrl).hostname, ...(config.report ?? {}) };
+  return {
+    // No paths: every page load but the homepage. Paths: those, whatever is asked for.
+    paths: Array.isArray(config.paths) && config.paths.length ? config.paths : null,
+    requests: pos(config.requests, 60),
+    windowSeconds: pos(config.windowSeconds, 60),
+    holdSeconds: pos(config.holdSeconds, 1800),
+    perAddress: per ? normaliseQuota({ ...per, store: per.store ?? memoryQuotaStore() }) : null,
+    report,
+    onChange: typeof config.onChange === 'function' ? config.onChange : null,
+  };
 }
 
 /** Whether a suspect allowance covers this path. Like `meters`, except '/' alone is the homepage, not every path. */
