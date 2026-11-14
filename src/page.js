@@ -69,6 +69,7 @@ export function renderPage(ctx) {
     benefits = null,
     powerKey = null,
     checkout = null,
+    mass = null,
   } = ctx;
 
   /*
@@ -79,10 +80,20 @@ export function renderPage(ctx) {
    * argument is not.
    */
   const throttled = Boolean(quota?.exceeded);
-  const headline = throttled
-    ? 'You have used up the free allowance.'
-    : 'Training crawlers pay for access here.';
-  const opening = throttled
+  const headline = mass
+    ? mass.surge
+      ? `${siteName} is being scraped in bulk. Reading it takes a pass right now.`
+      : 'This address has read more pages than a person does.'
+    : throttled
+      ? 'You have used up the free allowance.'
+      : 'Training crawlers pay for access here.';
+  const opening = mass
+    ? `<p class="mut">${
+        mass.surge
+          ? `Thousands of addresses are copying ${esc(siteName)} page by page, so for now every page here is read with a pass. It is ${esc(price)} a day, paid over x402 by any HTTP client, or with the button below.`
+          : `Keep reading with a pass: ${esc(price)} a day, paid over x402 by any HTTP client, or with the button below.`
+      }</p>`
+    : throttled
     ? `<p class="mut">${esc(String(quota.requests))} requests every ${esc(String(quota.windowSeconds))} seconds are free, no key and no account, and that is not changing. ` +
       `You have gone past it${quota.resetSeconds ? `, and it resets in ${esc(String(quota.resetSeconds))} seconds` : ''}. ` +
       `A pass lifts the limit rather than waiting it out.</p>`
@@ -95,7 +106,7 @@ export function renderPage(ctx) {
    * be worth rotating for costs more in proxies than the pass does. Anyone
    * weighing the two should be able to see that from here.
    */
-  const arithmetic = throttled
+  const arithmetic = throttled || mass
     ? `<h2>Before you reach for a proxy pool</h2>
 <p class="mut">Spreading the same crawl over rotating addresses works, and it is the expensive way to do this. Residential bandwidth is sold by the gigabyte, you still fetch every page one at a time, and the bill starts on the first day. A pass is ${esc(price)} a day, flat, with no rotation to maintain and nothing to keep working. We would rather sell you access than play that game, which is why the limit answers with a price instead of a refusal.</p>`
     : '';

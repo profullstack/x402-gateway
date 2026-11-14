@@ -120,6 +120,8 @@ export interface GatewayOptions {
   /** Require a one-line script (cookie + reload) on these paths before serving them. Off by default. */
   /** Only GETs to `paths` that `when` accepts (default: all of them), e.g. `(req, url) => url.search.length > 1` for faceted URLs. */
   challenge?: { paths: string[]; cookie?: string; /** Proof-of-work bits the script must solve; true = 16. Default 0 (cookie + reload only). */ work?: number | boolean; /** Link a per-address stylesheet whose fetch sets `<cookie>_css`; both cookies are then required. */ css?: boolean; /** Where that stylesheet is served. Default '/__pf/c/'. */ cssPath?: string; when?: (request: Request, url: URL) => boolean } | false;
+  /** Mass-scrape gate, ON by default (`false` turns it off). Past `requests` anonymous page loads per `windowSeconds` site-wide (default 60/min), every anonymous page load is answered 402 with the x402 offer for `holdSeconds` (default 1800); one address past `perAddress` (default 120/hour) pays too. Runs before `exempt`. Refusals are reported to CrawlProof as `bot:swarm`. */
+  massScrape?: { paths?: string[]; requests?: number; windowSeconds?: number; holdSeconds?: number; perAddress?: { requests: number; windowSeconds?: number } | false; report?: { url?: string; token?: string; site?: string; bucket?: string; everySeconds?: number } | false; onChange?: (state: MassScrapeState) => void } | false;
   /** SEO resellers: charged, and refused in robots.txt. Default SCRAPER_AGENTS. */
   scrapers?: string[];
   /** Headless browsers that name themselves: charged. Default HEADLESS_AGENTS. */
@@ -393,3 +395,5 @@ export function x402Gateway(gatewayOrOptions: Gateway | GatewayOptions): (c: { r
 /** ./next */
 export function x402Proxy(gatewayOrOptions: Gateway | GatewayOptions): (request: Request) => Promise<Response | undefined>;
 export function robotsRoute(gateway: Gateway, extra?: RobotsOptions): () => Response;
+
+export interface MassScrapeState { on: boolean; count: number; threshold: number; windowSeconds: number; since: string | null; until: string | null; peak: number; reported?: number | null }
