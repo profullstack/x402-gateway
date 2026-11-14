@@ -91,7 +91,7 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 | `path` | `/crawl` | the sales page |
 | `openPaths` | `[]` | extra paths a refused crawler may read (`robots.txt`, the sales page, `security.txt` and `.well-known/` always are) |
 | `isPaidAgent` | training + scraper + headless lists | `(userAgent) => boolean` |
-| `botQuota` | `100` | free development requests per minute for declared paid crawlers; accepts the same store and identity options as `freeQuota`, or `false` to disable |
+| `botQuota` | off | opt-in (e.g. `100`) free development requests per minute for declared paid crawlers; accepts the same store and identity options as `freeQuota`, or `false` to disable |
 | `scrapers` | `SCRAPER_AGENTS` | SEO resellers (AhrefsBot, SemrushBot, MJ12bot, DataForSeoBot, ...): charged and refused in robots.txt |
 | `headless` | `HEADLESS_AGENTS` | headless browsers that name themselves (Lightpanda, HeadlessChrome, PhantomJS): charged past `suspectAllowance` |
 | `aiIndex` | none | extra agents to charge and refuse in robots.txt. Since 0.10 the AI answer-engine indexers (`AI_INDEX_AGENTS`: meta-webindexer, YouBot, ExaSearchBot, AionBot) are welcome retrieval crawlers; pass `aiIndex: AI_INDEX_AGENTS` to charge them anyway |
@@ -122,7 +122,7 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 
 Without `coinpay.apiKey` and `payTo`, the free development allowance still works. Paid access is unavailable after a caller uses it up.
 
-Training crawlers and other declared paid crawlers get `botQuota` first. It is keyed by caller address by default; its built-in store is in process, so each gateway process grants its own allowance. Provide a shared `store` to aggregate a caller's quota across processes or sites.
+Training crawlers and other declared paid crawlers pay from the first request. A site that wants to give them a development allowance sets `botQuota` (off by default since 0.18.1: it was 100/min in 0.17/0.18.0, which gave every training crawler ~144k free pages a day per address). It is keyed by caller address by default; its built-in store is in process, so each gateway process grants its own allowance. Provide a shared `store` to aggregate a caller's quota across processes or sites.
 
 ## One key for every site
 
