@@ -397,3 +397,30 @@ export function x402Proxy(gatewayOrOptions: Gateway | GatewayOptions): (request:
 export function robotsRoute(gateway: Gateway, extra?: RobotsOptions): () => Response;
 
 export interface MassScrapeState { on: boolean; count: number; threshold: number; windowSeconds: number; since: string | null; until: string | null; peak: number; reported?: number | null }
+
+/** ./nano-pay -- the buyer's side of XNO on Nano. Holds no key: `send` is the agent's wallet. */
+export const RAW_PER_XNO: bigint;
+/** A decimal XNO amount as raw (10^30 per XNO), never rounded. */
+export function xnoToRaw(xno: string | number): string;
+export interface NanoOfferEntry { scheme: 'exact'; network: 'nano'; amount: string; asset?: string; payTo: string; maxTimeoutSeconds?: number; extra?: Record<string, any>; resource?: string }
+/** The payable `exact`/`nano` entry of a 402 body or PAYMENT-REQUIRED header, or null. */
+export function pickNanoOffer(required: Offer | Record<string, any> | string | null): NanoOfferEntry | null;
+/** What the wallet signs: the payee, the exact raw amount, the order id and (when the offer binds) the representative. */
+export function nanoPaymentPlan(entry: NanoOfferEntry, options: { maxRaw: string | bigint; orderId?: string }): Promise<{ to: string; amountRaw: string; orderId: string; representative: string | null }>;
+/** The PAYMENT-SIGNATURE / X-PAYMENT value for a sent block. */
+export function nanoPaymentHeader(entry: NanoOfferEntry, proof: { blockHash: string; orderId: string }): string;
+/** Payments planned or sent but not yet accepted, keyed by URL. */
+export interface NanoPending {
+  get(key: string): { orderId: string; to: string; amountRaw: string; blockHash: string | null } | null | Promise<{ orderId: string; to: string; amountRaw: string; blockHash: string | null } | null>;
+  put(key: string, value: { orderId: string; to: string; amountRaw: string; blockHash: string | null }): void | Promise<void>;
+  delete(key: string): void | Promise<void>;
+}
+/** Pending payments in memory: a restart forgets them. For tests only. */
+export function memoryPending(): NanoPending;
+/** Pending payments appended and fsynced to `path`, read back on start (./nano-pay-file). */
+export function filePending(path: string): NanoPending & { readonly size: number };
+/** Fetch `url`, pay its 402's Nano entry once (at most `maxRaw`), and fetch again with the proof. */
+export function payWithNano(
+  url: string | URL,
+  options: { send: (s: { to: string; amountRaw: string; representative: string | null }) => Promise<string>; maxRaw: string | bigint; pending?: NanoPending; fetch?: typeof fetch; init?: RequestInit },
+): Promise<Response>;

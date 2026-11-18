@@ -59,6 +59,14 @@
     "./nano-claims-file": {
       "types": "./index.d.ts",
       "import": "./src/nano-claims-file.js"
+    },
+    "./nano-pay": {
+      "types": "./index.d.ts",
+      "import": "./src/nano-pay.js"
+    },
+    "./nano-pay-file": {
+      "types": "./index.d.ts",
+      "import": "./src/nano-pay-file.js"
     }
   },
   "types": "./index.d.ts",

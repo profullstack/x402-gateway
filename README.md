@@ -278,6 +278,25 @@ const gateway = createGateway({
 - **Once, across restarts.** Each block hash and each order id is credited once; `fileClaims` appends and fsyncs every claim and reads the file back on start (one process per file). The same block with the same order id again gets back a pass that ends where the first one did.
 - `nanoPayee` now checks the address checksum, so a mistyped payee is refused at start rather than offered.
 
+### Paying an XNO offer from an agent (opt-in)
+
+The other side of the same offer. `@profullstack/x402-gateway/nano-pay` reads a 402, pays its `nano` entry with the agent's own wallet and presents the proof. It holds no key and signs nothing: `send` is your wallet, called once with `{ to, amountRaw, representative }`, and it returns the hash of the send block it published.
+
+```js
+import { payWithNano, xnoToRaw } from '@profullstack/x402-gateway/nano-pay';
+import { filePending } from '@profullstack/x402-gateway/nano-pay-file';
+
+const res = await payWithNano('https://site.example/', {
+  maxRaw: xnoToRaw('0.05'), // the most this call may spend
+  send: (s) => wallet.send(s), // your wallet; resolves to the block hash
+  pending: filePending('/var/lib/agent/nano-pending.log'),
+});
+```
+
+- **Bound to the order.** When the entry's `extra.binding` is `xno-binding/v1/rep`, `representative` is the order commitment for the offered `orderId`, payee and amount, which is what the gateway's check above recomputes. Without a binding it is `null` and the wallet keeps its own.
+- **Capped.** An entry above `maxRaw` is refused before the wallet is called. Amounts are integer raw; `xnoToRaw` derives them from 10^30 and refuses more than 30 decimals. The payee's checksum is checked.
+- **Paid once, across restarts.** The plan is written to `pending` before the wallet is called and the block hash right after. The next run for the same URL presents that block again rather than sending a second one, and a plan left without a hash (the process died during the send) is refused until you record the block yourself.
+
 ## Who is on which list
 
 `TRAINING_AGENTS` is the documented corpus-crawl token of each operator; `RETRIEVAL_AGENTS` the search half of the same pairs: GPTBot / OAI-SearchBot, ClaudeBot / Claude-SearchBot, meta-externalagent / Meta-ExternalFetcher, Applebot-Extended / Applebot. Google-Extended stays welcome because Google documents it as also gating Gemini app grounding. Matching is a substring of the user agent, which identifies a self-declared crawler and nothing more: a crawler wearing a browser's user agent walks past this, and that one needs blocking at the edge.
