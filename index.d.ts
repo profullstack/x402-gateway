@@ -129,7 +129,10 @@ export interface GatewayOptions {
   /** Search crawlers never metered when their address matches their name. Default WELCOME_CRAWLERS; false disables. */
   welcome?: WelcomeCrawler[] | false;
   /** Requests never charged, e.g. ones carrying a signed-in cookie. */
-  exempt?: (request: Request) => boolean;
+  /** Never charged. Must VERIFY (signature or session lookup), may be async (0.18.3). Never a cookie-presence test: use `sessionCookie`. */
+  exempt?: (request: Request) => boolean | Promise<boolean>;
+  /** The site's session cookie name(s). Presence is a hint only (0.18.3): such a request is not charged for a suspect browser string; declared crawlers, the challenge and quotas still apply. */
+  sessionCookie?: string | RegExp | Array<string | RegExp>;
   /** Verify the site's own credential: true never charged, false answered 401, null carries on. Since 0.16. */
   authenticate?: (request: Request) => boolean | null | undefined | Promise<boolean | null | undefined>;
   /** Pages per address a spoofed, stale or headless browser string reads before the 402 (default 20 an hour); false charges at once. Since 0.16. */

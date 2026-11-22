@@ -197,7 +197,8 @@ const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout'
  * @param {boolean} [options.chargeImpostors=true]  charge a request wearing a welcome search crawler's name from outside its published ranges
  * @param {{paths: string[], cookie?: string, work?: number|boolean, css?: boolean, cssPath?: string, when?: (request: Request, url: URL) => boolean}|false} [options.challenge]  requests to these paths (and, with `when`, only those it accepts, e.g. faceted URLs) must run a one-line script (cookie + reload) first; with `work` (bits, `true` = 16) the script must also solve a SHA-256 proof of work, so a swarm that rotates its address every page pays it on every page; with `css` the page links a per-address stylesheet (at `cssPath`, default `/__pf/c/`) whose fetch sets a second cookie, so a scraper that blocks stylesheets never passes; off by default
  * @param {{token: string, cidrs: string[]}[]|false} [options.welcome]  search crawlers never metered when name and address agree; default WELCOME_CRAWLERS
- * @param {(request: Request) => boolean} [options.exempt]  requests never charged, e.g. ones carrying a signed-in cookie
+ * @param {(request: Request) => boolean|Promise<boolean>} [options.exempt]  requests never charged; must VERIFY (a signature or a session lookup), never test that a cookie or header is present: use `sessionCookie` for that
+ * @param {string|RegExp|Array<string|RegExp>} [options.sessionCookie]  the site's session cookie name(s); its mere presence is a hint, not a pass: such a request is not charged for a suspect browser string, but declared crawlers, impostors, the challenge and every quota still apply
  * @param {(request: Request) => boolean|null|Promise<boolean|null>} [options.authenticate]  verify the site's own credential (API key, session bearer): true is never charged, false is answered 401, null (no credential) carries on; must VERIFY, not test for a header
  * @param {number|{requests: number, windowSeconds?: number, paths?: string[], identify?: (request: Request) => string|null, store?: object}|false} [options.suspectAllowance]  requests charged only for a spoofed, stale or headless browser string read this many pages per address first (default 20 an hour); with `paths`, only on those paths or prefixes (a trailing / is a prefix, but '/' alone is the homepage); false charges them on the first request
  * @param {{paths: string[], requests?: number, windowSeconds?: number, holdSeconds?: number, perAddress?: {requests: number, windowSeconds?: number}|false, report?: {url?: string, token?: string, site?: string, bucket?: string, everySeconds?: number}, onChange?: (state: object) => void}|false} [options.massScrape]  when anonymous reads of these paths, summed over every address, pass `requests` per `windowSeconds` (default 60 a minute), every read there without a pass is answered 402 with the x402 offer until the rate has stayed under for `holdSeconds` (default 1800); with `perAddress` (default 60 an hour) one address reading past it pays too. Passes, Power Keys, `exempt`, `authenticate` and welcome crawlers are untouched. With `report`, the refused requests are posted to CrawlProof as bot hits (bucket `bot:swarm`) once a minute. On by default (`false` turns it off); with no `paths` it counts every page load but the homepage. `report` defaults to the siteUrl hostname with no token; `report: false` stops it
@@ -516,6 +517,16 @@ export function createGateway(options = {}) {
 
   /** Whether the lists would charge this request, allowance aside. */
   const isPaid = (request) => declaredPaid(request) || suspectBrowser(request);
+
+  /** Whether the request carries one of the site's session cookies (presence only: a hint, never a pass). */
+  const sessionNames = [].concat(o.sessionCookie ?? []);
+  const hasSessionCookie = (request) => {
+    if (!sessionNames.length) return false;
+    const header = request.headers.get('cookie') ?? '';
+    if (!header) return false;
+    const names = header.split(';').map((part) => part.split('=')[0].trim()).filter(Boolean);
+    return sessionNames.some((want) => (want instanceof RegExp ? names.some((n) => want.test(n)) : names.includes(want)));
+  };
 
   /**
    * What the site's `authenticate` hook says about the credential a request
@@ -1044,7 +1055,14 @@ export function createGateway(options = {}) {
       const answer = await massGate(request, path);
       if (answer) return answer;
     }
-    if (o.exempt && o.exempt(request)) return null;
+    /*
+     * `exempt` is awaited (0.18.3) so a site can verify a session against its
+     * database. Until then every fleet site passed a bare "the session cookie's
+     * name is in Cookie" test here, and `Cookie: site_session=x` let any
+     * crawler, GPTBot included, read free. A cookie that is merely present
+     * belongs in `sessionCookie`, which only spares a suspect browser string.
+     */
+    if (o.exempt && (await o.exempt(request))) return null;
     // Signing in, paying and running an account are never sold. See APP_PATHS.
     if (o.appPaths && isAppPath(path, o.appPaths)) return null;
 
@@ -1082,7 +1100,15 @@ export function createGateway(options = {}) {
       }
       return sell(request);
     }
-    if (suspectBrowser(request)) {
+    /*
+     * A request carrying the site's session cookie is not judged by its browser
+     * string (a signed-in person on an old browser is still a person), but the
+     * cookie is something any client can send, so it buys nothing more: a
+     * declared crawler above was already charged, and the challenge and quotas
+     * below still apply. A forged cookie gets exactly what a modern browser
+     * string would, which is what the client could have written anyway.
+     */
+    if (!hasSessionCookie(request) && suspectBrowser(request)) {
       const quota = o.suspectAllowance;
       // With `paths`, only those pages get the allowance (a homepage, say);
       // everywhere else a suspect string pays on sight, as before 0.16.
@@ -1340,6 +1366,7 @@ function normalise(options) {
     challengeStaleBrowsers: options.challengeStaleBrowsers !== false,
     chargeImpostors: options.chargeImpostors !== false,
     exempt: options.exempt ?? null,
+    sessionCookie: options.sessionCookie ?? null,
     authenticate: typeof options.authenticate === 'function' ? options.authenticate : null,
     suspectAllowance: options.suspectAllowance === false ? null : normaliseQuota(options.suspectAllowance ?? { requests: 20, windowSeconds: 3600 }),
     appPaths: options.appPaths === false ? null : [...APP_PATHS, ...(options.appPaths ?? [])],

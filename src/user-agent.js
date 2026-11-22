@@ -7,7 +7,7 @@
  * anonymous caller and its logs cannot say which one is misbehaving.
  */
 
-export const VERSION = '0.18.2';
+export const VERSION = '0.18.3';
 
 const env = (name) => {
   try {
