@@ -221,9 +221,12 @@ export function createGateway(options = {}) {
   const enabled = Boolean(o.coinpay.apiKey && o.payTo);
   const secret = o.secret || o.coinpay.apiKey || null;
 
-  const openPaths = ['/robots.txt', o.path, '/security.txt', '/.well-known/', ...o.openPaths];
+  // Sitemaps are as public as robots.txt, which points every crawler at them: /sitemap.xml,
+  // /sitemap-<part>.xml, /sitemap_index.xml and anything under /sitemaps/ stay readable.
+  const openPaths = ['/robots.txt', o.path, '/security.txt', '/.well-known/', '/sitemaps/', ...o.openPaths];
   const denied = compileCidrs(o.denyCidrs);
-  const isOpen = (path) => openPaths.some((p) => (p.endsWith('/') ? path.startsWith(p) : path === p));
+  const isSitemap = (path) => /^\/sitemap[\w.-]*\.xml(\.gz)?$/.test(path);
+  const isOpen = (path) => isSitemap(path) || openPaths.some((p) => (p.endsWith('/') ? path.startsWith(p) : path === p));
 
   const mass = o.massScrape ? massCounter(o.massScrape) : null;
   const massReport = mass && o.massScrape.report ? botHitReporter(o.massScrape.report, o.fetch) : null;

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.18.4 (2026-11-22)
+
+Sitemaps are always readable. `/sitemap.xml`, `/sitemap-<part>.xml`, `/sitemap_index.xml` (and `.xml.gz`)
+and anything under `/sitemaps/` join `robots.txt` in the open paths, so a refused crawler that
+follows the `Sitemap:` line in robots.txt reads the sitemap instead of a 402.
+
 ## 0.18.3 (2026-11-22)
 
 **Security.** A session cookie that is merely present no longer has to be an exemption.

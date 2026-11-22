@@ -89,7 +89,7 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 | `maxDays` | `30` | the most terms one proof may buy at once |
 | `header` | `x-crawl-pass` | where the pass goes; `Authorization: Bearer` works too |
 | `path` | `/crawl` | the sales page |
-| `openPaths` | `[]` | extra paths a refused crawler may read (`robots.txt`, the sales page, `security.txt` and `.well-known/` always are) |
+| `openPaths` | `[]` | extra paths a refused crawler may read (`robots.txt`, every sitemap (`/sitemap*.xml`, `/sitemaps/`), the sales page, `security.txt` and `.well-known/` always are) |
 | `isPaidAgent` | training + scraper + headless lists | `(userAgent) => boolean` |
 | `botQuota` | off | opt-in (e.g. `100`) free development requests per minute for declared paid crawlers; accepts the same store and identity options as `freeQuota`, or `false` to disable |
 | `scrapers` | `SCRAPER_AGENTS` | SEO resellers (AhrefsBot, SemrushBot, MJ12bot, DataForSeoBot, ...): charged and refused in robots.txt |

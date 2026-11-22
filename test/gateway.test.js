@@ -368,6 +368,14 @@ describe('the gate', () => {
     assert.equal(await gateway.handle(req('/llms.txt')), null);
     assert.equal((await gateway.handle(req('/crawl'))).status, 402);
   });
+  it('leaves every sitemap readable, since robots.txt names it', async () => {
+    const { gateway } = gatewayFor();
+    for (const path of ['/sitemap.xml', '/sitemap-1.xml', '/sitemap_index.xml', '/sitemap.xml.gz', '/sitemaps/items-2026-11.xml']) {
+      assert.equal(await gateway.handle(req(path)), null, path);
+    }
+    assert.equal((await gateway.handle(req('/sitemap'))).status, 402);
+    assert.equal((await gateway.handle(req('/sitemap.xml/x'))).status, 402);
+  });
   it('sells at the sales page to anyone, whatever user agent', async () => {
     const { gateway } = gatewayFor();
     const res = await gateway.handle(req('/crawl', { ua: 'curl/8.0', accept: '*/*' }));
