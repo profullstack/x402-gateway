@@ -8,8 +8,9 @@ Every Profullstack site passed `exempt: (r) => cookie.includes('<site>_session='
 send that header, so `Cookie: <site>_session=x` let GPTBot and every other declared crawler read
 free, past the challenge and the free allowance.
 
-- New option `sessionCookie` (string, RegExp, or an array of either): the site's session cookie
-  name. Its presence is a hint, not a pass. Such a request is not charged for a suspect (stale or
+- New option `sessionCookie` (string, RegExp, a synchronous `(request) => boolean` predicate, or an
+  array of these): the site's session cookie name, or any unverified signed-in signal (a token's
+  shape). Its presence is a hint, not a pass. Such a request is not charged for a suspect (stale or
   spoofed) browser string, so a signed-in person on an old browser still reads. Declared crawlers
   and impostors are still charged, and the challenge, `denyCidrs`, `massScrape` and the quotas all
   still apply. A forged cookie buys exactly what a modern browser string would.

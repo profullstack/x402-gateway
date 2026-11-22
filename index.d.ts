@@ -131,8 +131,8 @@ export interface GatewayOptions {
   /** Requests never charged, e.g. ones carrying a signed-in cookie. */
   /** Never charged. Must VERIFY (signature or session lookup), may be async (0.18.3). Never a cookie-presence test: use `sessionCookie`. */
   exempt?: (request: Request) => boolean | Promise<boolean>;
-  /** The site's session cookie name(s). Presence is a hint only (0.18.3): such a request is not charged for a suspect browser string; declared crawlers, the challenge and quotas still apply. */
-  sessionCookie?: string | RegExp | Array<string | RegExp>;
+  /** The site's session cookie name(s), or a sync predicate for an unverified signed-in signal (a token's shape). Presence is a hint only (0.18.3): such a request is not charged for a suspect browser string; declared crawlers, the challenge and quotas still apply. */
+  sessionCookie?: SessionHint | SessionHint[];
   /** Verify the site's own credential: true never charged, false answered 401, null carries on. Since 0.16. */
   authenticate?: (request: Request) => boolean | null | undefined | Promise<boolean | null | undefined>;
   /** Pages per address a spoofed, stale or headless browser string reads before the 402 (default 20 an hour); false charges at once. Since 0.16. */
@@ -402,3 +402,5 @@ export function x402Proxy(gatewayOrOptions: Gateway | GatewayOptions): (request:
 export function robotsRoute(gateway: Gateway, extra?: RobotsOptions): () => Response;
 
 export interface MassScrapeState { on: boolean; count: number; threshold: number; windowSeconds: number; since: string | null; until: string | null; peak: number; reported?: number | null }
+
+export type SessionHint = string | RegExp | ((request: Request) => boolean);

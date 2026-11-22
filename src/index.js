@@ -198,7 +198,7 @@ const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout'
  * @param {{paths: string[], cookie?: string, work?: number|boolean, css?: boolean, cssPath?: string, when?: (request: Request, url: URL) => boolean}|false} [options.challenge]  requests to these paths (and, with `when`, only those it accepts, e.g. faceted URLs) must run a one-line script (cookie + reload) first; with `work` (bits, `true` = 16) the script must also solve a SHA-256 proof of work, so a swarm that rotates its address every page pays it on every page; with `css` the page links a per-address stylesheet (at `cssPath`, default `/__pf/c/`) whose fetch sets a second cookie, so a scraper that blocks stylesheets never passes; off by default
  * @param {{token: string, cidrs: string[]}[]|false} [options.welcome]  search crawlers never metered when name and address agree; default WELCOME_CRAWLERS
  * @param {(request: Request) => boolean|Promise<boolean>} [options.exempt]  requests never charged; must VERIFY (a signature or a session lookup), never test that a cookie or header is present: use `sessionCookie` for that
- * @param {string|RegExp|Array<string|RegExp>} [options.sessionCookie]  the site's session cookie name(s); its mere presence is a hint, not a pass: such a request is not charged for a suspect browser string, but declared crawlers, impostors, the challenge and every quota still apply
+ * @param {string|RegExp|((request: Request) => boolean)|Array<string|RegExp|((request: Request) => boolean)>} [options.sessionCookie]  the site's session cookie name(s), or a synchronous predicate for an unverified signed-in signal (a token's shape); its mere presence is a hint, not a pass: such a request is not charged for a suspect browser string, but declared crawlers, impostors, the challenge and every quota still apply
  * @param {(request: Request) => boolean|null|Promise<boolean|null>} [options.authenticate]  verify the site's own credential (API key, session bearer): true is never charged, false is answered 401, null (no credential) carries on; must VERIFY, not test for a header
  * @param {number|{requests: number, windowSeconds?: number, paths?: string[], identify?: (request: Request) => string|null, store?: object}|false} [options.suspectAllowance]  requests charged only for a spoofed, stale or headless browser string read this many pages per address first (default 20 an hour); with `paths`, only on those paths or prefixes (a trailing / is a prefix, but '/' alone is the homepage); false charges them on the first request
  * @param {{paths: string[], requests?: number, windowSeconds?: number, holdSeconds?: number, perAddress?: {requests: number, windowSeconds?: number}|false, report?: {url?: string, token?: string, site?: string, bucket?: string, everySeconds?: number}, onChange?: (state: object) => void}|false} [options.massScrape]  when anonymous reads of these paths, summed over every address, pass `requests` per `windowSeconds` (default 60 a minute), every read there without a pass is answered 402 with the x402 offer until the rate has stayed under for `holdSeconds` (default 1800); with `perAddress` (default 60 an hour) one address reading past it pays too. Passes, Power Keys, `exempt`, `authenticate` and welcome crawlers are untouched. With `report`, the refused requests are posted to CrawlProof as bot hits (bucket `bot:swarm`) once a minute. On by default (`false` turns it off); with no `paths` it counts every page load but the homepage. `report` defaults to the siteUrl hostname with no token; `report: false` stops it
@@ -522,10 +522,11 @@ export function createGateway(options = {}) {
   const sessionNames = [].concat(o.sessionCookie ?? []);
   const hasSessionCookie = (request) => {
     if (!sessionNames.length) return false;
+    if (sessionNames.some((want) => typeof want === 'function' && safeTest(want, request))) return true;
     const header = request.headers.get('cookie') ?? '';
     if (!header) return false;
     const names = header.split(';').map((part) => part.split('=')[0].trim()).filter(Boolean);
-    return sessionNames.some((want) => (want instanceof RegExp ? names.some((n) => want.test(n)) : names.includes(want)));
+    return sessionNames.some((want) => (want instanceof RegExp ? names.some((n) => want.test(n)) : typeof want === 'string' && names.includes(want)));
   };
 
   /**
@@ -1447,3 +1448,12 @@ function challengeWork(work) {
 }
 
 export { METHODS as X402_METHODS };
+
+/** A hint predicate that throws is no hint. */
+function safeTest(fn, request) {
+  try {
+    return fn(request) === true;
+  } catch {
+    return false;
+  }
+}

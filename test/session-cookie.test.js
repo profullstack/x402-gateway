@@ -49,6 +49,15 @@ describe('sessionCookie is a hint, never a pass (0.18.3)', () => {
     assert.equal(await gw({ sessionCookie: ['a_session', 'b_session'] }).handle(req(SPOOFED, 'b_session=1')), null);
   });
 
+  it('takes a predicate for an unverified signal, with the same hint-only effect', async () => {
+    const shape = (r) => /^ct_[a-z]+$/.test(new URL(r.url).searchParams.get('ct') ?? '');
+    const gateway = gw({ sessionCookie: shape });
+    const at = (ua, q) => new Request(`https://example.test/p/1${q}`, { headers: { 'user-agent': ua, accept: '*/*', 'x-real-ip': '198.51.100.7' } });
+    assert.equal(await gateway.handle(at(SPOOFED, '?ct=ct_abc')), null);
+    assert.equal((await gateway.handle(at(GPTBOT, '?ct=ct_abc')))?.status, 402);
+    assert.equal((await gw({ sessionCookie: () => { throw new Error('x'); } }).handle(at(SPOOFED, '')))?.status, 402);
+  });
+
   it('does not stop a challenge or the OVH-style deny list', async () => {
     const gateway = gw({ sessionCookie: 'site_session', denyCidrs: ['198.51.100.0/24'] });
     assert.equal((await gateway.handle(req(SPOOFED, 'site_session=forged')))?.status, 403);
