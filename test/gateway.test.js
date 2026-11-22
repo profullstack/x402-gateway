@@ -424,6 +424,7 @@ describe('the gate', () => {
     // Both CoinPay calls, in order, with the scoped key and the offered expectations.
     assert.deepEqual(cp.calls.map((c) => new URL(c.url).pathname), ['/api/x402/verify', '/api/x402/settle']);
     assert.equal(cp.calls[0].headers['x-api-key'], KEY);
+    assert.match(cp.calls[0].headers['user-agent'], /^example\.test(\/\S+)? \(\+https:\/\/example\.test\) x402-gateway\/\d/);
     assert.deepEqual(cp.calls[0].body.expected, { amount: '1000000', resource: 'https://example.test/crawl', payTo: PAY_TO, asset: METHODS[0].asset });
     assert.equal(cp.calls[1].body.payment.payload.authorization.nonce, '0xn1');
 

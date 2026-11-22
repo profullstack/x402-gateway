@@ -9,6 +9,7 @@ import { mintPass, readPass } from './pass.js';
 import { robotsTxt } from './robots.js';
 import { botHitReporter, massCounter } from './mass.js';
 import { nodeUrl, settleNano } from './nano.js';
+import { defaultUserAgent, withUserAgent } from './user-agent.js';
 import {
   buildOffer,
   decodePayment,
@@ -211,6 +212,7 @@ const APP_API_SEGMENTS = new Set(['auth', 'oauth', 'callback', 'login', 'logout'
  * @param {string} [options.ipSalt]                key for the address hash recorded with a sale; defaults to the pass secret
  * @param {{apiKey?: string, baseUrl?: string, account?: (request: Request) => string|null|Promise<string|null>, expiresInMinutes?: number}|false} [options.checkout]  the human "Buy a day pass" button (CoinPay hosted checkout, any coin or PayPal); on by default with the CoinPay key, shown only once CoinPay serves checkout sessions
  * @param {string} [options.passCookie='crawl_pass']  cookie a pass is also read from
+ * @param {string} [options.userAgent]             User-Agent on every outbound call (CoinPay, checkout, reports); defaults to `<host>[/<npm_package_version>] (+<siteUrl>) x402-gateway/<v>`, or X402_USER_AGENT / COINPAY_USER_AGENT
  * @param {typeof fetch} [options.fetch]           for tests
  */
 export function createGateway(options = {}) {
@@ -1309,6 +1311,7 @@ function normaliseNano(nano) {
 function normalise(options) {
   const siteUrl = String(options.siteUrl ?? '').replace(/\/+$/, '');
   if (!siteUrl) throw new Error('createGateway needs siteUrl');
+  const userAgent = String(options.userAgent || defaultUserAgent(siteUrl));
   const training = options.training ?? TRAINING_AGENTS;
   const scrapers = options.scrapers ?? SCRAPER_AGENTS;
   const headless = options.headless ?? HEADLESS_AGENTS;
@@ -1374,7 +1377,8 @@ function normalise(options) {
     benefits: Array.isArray(options.benefits) ? options.benefits : null,
     powerKeys: options.powerKeys === false ? null : (options.powerKeys ?? PROFULLSTACK_KEYS),
     revokedKeys: options.revokedKeys ?? null,
-    fetch: options.fetch ?? globalThis.fetch,
+    userAgent,
+    fetch: withUserAgent(options.fetch ?? globalThis.fetch, userAgent),
   };
 }
 

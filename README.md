@@ -119,6 +119,7 @@ export const GET = robotsRoute(gateway, { disallow: ['/login', '/api/'] });
 | `appPaths` | `APP_PATHS` | extra paths never charged, added to the default sign-in, account, checkout, pay and webhook paths (plus any `/api/` route with an `auth`, `oauth`, `callback`, `login`, `signup`, `webhook(s)` or `health` segment) (`/login`, `/signup`, `/oauth`, `/dashboard`, `/checkout`, `/pay`, `/webhooks`, `/api/auth`, `/api/health`, ...; see `APP_PATHS`). Matched by whole segment. An app whose whole `/api/` is credentialed adds `'/api'`. `false` charges them like any page |
 | `powerKeys` | Profullstack's | Power Keys honoured as a pass, kid to public key. `false` switches it off. See below. |
 | `revokedKeys` | | Power Key subjects no longer honoured |
+| `userAgent` | `<host>[/<app version>] (+<siteUrl>) x402-gateway/<v>` | since 0.18.2, the User-Agent on every call the gateway makes (CoinPay verify/settle and hosted checkout, the bot-hit report, a Nano node), so CoinPay logs and throttles name the site instead of seeing `Bun/1.4` or `node` from one shared host. The app version is `npm_package_version` when the app runs under npm/bun run. `X402_USER_AGENT` or `COINPAY_USER_AGENT` in the environment replace it |
 
 Without `coinpay.apiKey` and `payTo`, the free development allowance still works. Paid access is unavailable after a caller uses it up.
 

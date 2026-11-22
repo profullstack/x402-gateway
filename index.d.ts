@@ -171,6 +171,8 @@ export interface GatewayOptions {
   powerKeys?: Record<string, string> | false;
   /** Power Key subjects no longer honoured (refunded, leaked). */
   revokedKeys?: Iterable<string>;
+  /** User-Agent on every outbound call; defaults to `<host>[/<app version>] (+<siteUrl>) x402-gateway/<v>`. */
+  userAgent?: string;
   fetch?: typeof fetch;
 }
 
