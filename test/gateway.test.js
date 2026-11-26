@@ -519,6 +519,14 @@ describe('the gate', () => {
     assert.equal(paid.status, 402);
   });
 
+  it('rejects non-positive or non-finite priceCents at startup', () => {
+    for (const priceCents of [0, -1, -0.01, NaN, Infinity, -Infinity, '100', null]) {
+      assert.throws(() => gatewayFor({ priceCents }), /priceCents must be a positive finite number/);
+    }
+    assert.doesNotThrow(() => gatewayFor());
+    assert.doesNotThrow(() => gatewayFor({ priceCents: 0.0001 }));
+  });
+
   it('honours a custom price, window, header, path and page', async () => {
     const { gateway } = gatewayFor({ priceCents: 250, passMinutes: 60, header: 'X-Pass', path: '/pay', page: (ctx) => `<p>${ctx.price} ${ctx.minutes}</p>` });
     const res = await gateway.handle(req('/pay'));

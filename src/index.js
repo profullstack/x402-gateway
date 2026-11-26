@@ -1375,6 +1375,10 @@ function normaliseNano(nano) {
 function normalise(options) {
   const siteUrl = String(options.siteUrl ?? '').replace(/\/+$/, '');
   if (!siteUrl) throw new Error('createGateway needs siteUrl');
+  const priceCents = options.priceCents === undefined ? 100 : options.priceCents;
+  if (!Number.isFinite(priceCents) || priceCents <= 0) {
+    throw new Error('priceCents must be a positive finite number');
+  }
   const userAgent = String(options.userAgent || defaultUserAgent(siteUrl));
   const training = options.training ?? TRAINING_AGENTS;
   const scrapers = options.scrapers ?? SCRAPER_AGENTS;
@@ -1391,7 +1395,7 @@ function normalise(options) {
     },
     payTo: options.payTo ?? '',
     nano: normaliseNano(options.nano),
-    priceCents: Number.isFinite(options.priceCents) ? options.priceCents : 100,
+    priceCents,
     currency: options.currency ?? 'USD',
     passMinutes: Number.isFinite(options.passMinutes) && options.passMinutes > 0 ? options.passMinutes : 1440,
     maxDays: Number.isInteger(options.maxDays) && options.maxDays >= 1 ? options.maxDays : 30,
